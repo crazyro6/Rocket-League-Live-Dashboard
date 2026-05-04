@@ -1,16 +1,66 @@
-# React + Vite
+# Rocket League Live Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Live web dashboard for Rocket League Stats API data.  
+It shows real-time match info, per-player stats, tracker links, and session results (W/L + streak).
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Live scoreboard from Rocket League local Stats API
+- Compact player stats (score, goals, assists, saves, shots, touches, demos)
+- Tracker links per player (platform-aware, including PSN normalization)
+- Session history with:
+  - Win / Loss entries
+  - Current streak (`🔥` for wins, `🧊` for losses)
+  - Early leave / forfeit fallback as loss when match is destroyed before `MatchEnded`
 
-## React Compiler
+## Requirements
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Node.js (LTS recommended): https://nodejs.org
+- Rocket League Stats API enabled locally on `127.0.0.1:49123`
 
-## Expanding the ESLint configuration
+## Quick Start (recommended)
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+1. Install dependencies (first time only):
+   ```bash
+   npm install
+   ```
+2. Launch app + proxy together:
+   - Double-click `start-app.bat`  
+   or
+   ```bash
+   npm run start
+   ```
+3. Open `http://localhost:5173` (or the URL shown in terminal if 5173 is occupied)
+
+## Available Scripts
+
+- `npm run dev` - Start Vite dev server only
+- `npm run proxy` - Start Rocket League relay proxy only (port 3001)
+- `npm run start` - Start proxy + dev server together
+- `npm run build` - Build production files into `dist/`
+- `npm run preview` - Preview production build
+- `npm run lint` - Run ESLint
+
+## How It Works
+
+- `proxy.js` opens a local TCP connection to the Rocket League Stats API (`127.0.0.1:49123`)
+- Browser app reads from `/rl` through Vite proxy -> Node relay
+- App parses streamed JSON messages and updates UI in real time
+
+## Git / Upload Notes
+
+Recommended to exclude:
+
+- `node_modules/`
+- `dist/`
+- `*.zip`
+- `vite.log`
+- `proxy-output.txt`
+
+(`.gitignore` is already configured for these.)
+
+## Troubleshooting
+
+- **Blank page / no data**: verify Rocket League Stats API is enabled and in a live match
+- **Port in use**: close previous dev/proxy processes or use the URL printed by Vite
+- **`npm` not found**: install Node.js and reopen terminal
