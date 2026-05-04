@@ -18,6 +18,11 @@ It shows real-time match info, per-player stats, tracker links, and session resu
 - Node.js (LTS recommended): https://nodejs.org
 - Rocket League Stats API enabled locally on `127.0.0.1:49123`
 
+## Download This Project
+
+Download or clone the **entire repository** (all files/folders).  
+Do not download just a single file, since the app needs the full project structure and dependencies.
+
 ## Rocket League Setup (Stats API)
 
 1. Before launching Rocket League, edit:
