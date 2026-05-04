@@ -18,6 +18,18 @@ It shows real-time match info, per-player stats, tracker links, and session resu
 - Node.js (LTS recommended): https://nodejs.org
 - Rocket League Stats API enabled locally on `127.0.0.1:49123`
 
+## Rocket League Setup (Stats API)
+
+1. Before launching Rocket League, edit:
+   `\<Install Dir>\TAGame\Config\DefaultStatsAPI.ini`
+2. Set these values:
+   - `PacketSendRate` = any value `> 0` (for example `60`; max `120`)
+   - `Port` = `49123`
+3. Save the file and launch Rocket League.
+4. Enter a match (or free play) so live events are emitted.
+5. Start this dashboard (`start-app.bat` or `npm run start`).
+6. If the page loads but shows no live data, re-check `DefaultStatsAPI.ini` and confirm the game is active.
+
 ## Quick Start (recommended)
 
 1. Install dependencies (first time only):
