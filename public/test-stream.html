@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Stream Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+    h1 { color: #4ec9b0; }
+    button { padding: 10px 20px; font-size: 14px; cursor: pointer; background: #0e639c; color: white; border: none; border-radius: 4px; }
+    button:hover { background: #1177bb; }
+    #output { border: 1px solid #555; padding: 15px; height: 500px; overflow-y: auto; background: #252526; margin-top: 20px; border-radius: 4px; }
+    .error { color: #f48771; }
+    .success { color: #89d185; }
+    .event { color: #9cdcfe; }
+    .info { color: #ce9178; }
+  </style>
+</head>
+<body>
+  <h1>🚀 Rocket League Stream Test</h1>
+  <p>This tests direct connection to the proxy streaming API</p>
+  <button onclick="startStreaming()">📡 Start Streaming Test</button>
+  <button onclick="clearOutput()" style="margin-left: 10px; background: #555;">Clear</button>
+  <div id="output"></div>
+
+  <script>
+    const output = document.getElementById('output');
+
+    function log(msg, type = 'normal') {
+      const div = document.createElement('div');
+      if (type) div.className = type;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      output.appendChild(div);
+      output.scrollTop = output.scrollHeight;
+      console.log(`[${type}]`, msg);
+    }
+
+    function clearOutput() {
+      output.innerHTML = '';
+    }
+
+    async function startStreaming() {
+      try {
+        log('Connecting to http://localhost:3001/...', 'info');
+        
+        const response = await fetch('http://localhost:3001/', {
+          method: 'GET'
+        });
+
+        log(`Response status: ${response.status}`, response.ok ? 'success' : 'error');
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        log('✓ Connected! Reading stream...', 'success');
+        log('Waiting for data...', 'info');
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let chunkCount = 0;
+        let messageCount = 0;
+        let eventCounts = {};
+
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) {
+            log('✓ Stream ended', 'success');
+            log(`Total: ${chunkCount} chunks, ${messageCount} messages`, 'success');
+            log('Event summary: ' + JSON.stringify(eventCounts), 'success');
+            break;
+          }
+
+          chunkCount++;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          
+          // Process all complete lines
+          for (let i = 0; i < lines.length - 1; i++) {
+            let line = lines[i].trim();
+            
+            if (!line || /^[0-9a-fA-F]+$/.test(line)) {
+              continue;
+            }
+
+            messageCount++;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.Event) {
+                eventCounts[msg.Event] = (eventCounts[msg.Event] || 0) + 1;
+                if (messageCount % 25 === 0 || msg.Event === 'UpdateState') {
+                  const detail = msg.Event === 'UpdateState' && msg.Data ? 
+                    ` - Players: ${msg.Data.Players?.length || 0}` : '';
+                  log(`Message #${messageCount}: Event="${msg.Event}"${detail}`, 
+                      msg.Event === 'UpdateState' ? 'success' : 'event');
+                }
+              }
+            } catch (e) {
+              log(`Parse error: ${line.substring(0, 40)}...`, 'error');
+            }
+          }
+
+          // Keep incomplete line in buffer
+          buffer = lines[lines.length - 1];
+
+          if (chunkCount % 20 === 0) {
+            log(`Progress: ${chunkCount} chunks, ${messageCount} messages...`, 'info');
+          }
+        }
+
+      } catch (err) {
+        log(`✗ Error: ${err.message}`, 'error');
+        console.error(err);
+      }
+    }
+  </script>
+</body>
+</html>

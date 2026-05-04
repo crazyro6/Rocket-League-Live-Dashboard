@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Stream Test</title>
+  <style>
+    body { font-family: monospace; }
+    #output { border: 1px solid #ccc; padding: 10px; height: 400px; overflow-y: auto; }
+    .error { color: red; }
+    .success { color: green; }
+  </style>
+</head>
+<body>
+  <h1>Proxy Stream Test</h1>
+  <button onclick="startStreaming()">Start Streaming</button>
+  <div id="output"></div>
+
+  <script>
+    const output = document.getElementById('output');
+
+    function log(msg, type = 'normal') {
+      const div = document.createElement('div');
+      div.className = type;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      output.appendChild(div);
+      output.scrollTop = output.scrollHeight;
+      console.log(msg);
+    }
+
+    async function startStreaming() {
+      try {
+        log('Connecting to http://localhost:3001/', 'normal');
+        
+        const response = await fetch('http://localhost:3001/', {
+          method: 'GET',
+          headers: {
+            'Accept': '*/*'
+          }
+        });
+
+        log(`Response status: ${response.status}`, response.ok ? 'success' : 'error');
+        log(`Response headers:`, 'normal');
+        for (const [key, value] of response.headers.entries()) {
+          log(`  ${key}: ${value}`, 'normal');
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        log('✓ Connected! Reading stream...', 'success');
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let chunkCount = 0;
+        let messageCount = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) {
+            log('Stream ended', 'success');
+            break;
+          }
+
+          chunkCount++;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          
+          // Process all complete lines
+          for (let i = 0; i < lines.length - 1; i++) {
+            let line = lines[i].trim();
+            
+            if (!line || /^[0-9a-fA-F]+$/.test(line)) {
+              continue;
+            }
+
+            messageCount++;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.Event) {
+                log(`Message ${messageCount}: Event="${msg.Event}"`, msg.Event === 'UpdateState' ? 'success' : 'normal');
+              }
+            } catch (e) {
+              log(`Failed to parse line: ${line.substring(0, 50)}...`, 'error');
+            }
+          }
+
+          // Keep incomplete line in buffer
+          buffer = lines[lines.length - 1];
+
+          if (chunkCount % 10 === 0) {
+            log(`Received ${chunkCount} chunks, ${messageCount} messages...`, 'normal');
+          }
+        }
+
+      } catch (err) {
+        log(`✗ Error: ${err.message}`, 'error');
+        console.error(err);
+      }
+    }
+  </script>
+</body>
+</html>
