@@ -108,6 +108,27 @@ function App() {
       }
     }
 
+    const getWinnerTeamNumFromState = (stateData) => {
+      const game = stateData?.Game
+      if (!game?.bHasWinner) return null
+
+      const teams = Array.isArray(game.Teams) ? game.Teams : []
+      const blueScore = teams.find((t) => t.TeamNum === 0)?.Score ?? 0
+      const orangeScore = teams.find((t) => t.TeamNum === 1)?.Score ?? 0
+
+      if (blueScore !== orangeScore) {
+        return blueScore > orangeScore ? 0 : 1
+      }
+
+      const winnerName = typeof game.Winner === 'string' ? game.Winner.toLowerCase() : ''
+      const winnerTeam = teams.find((t) => typeof t?.Name === 'string' && t.Name.toLowerCase() === winnerName)
+      if (winnerTeam?.TeamNum === 0 || winnerTeam?.TeamNum === 1) {
+        return winnerTeam.TeamNum
+      }
+
+      return null
+    }
+
     const connectToAPI = async () => {
       const apiUrl = '/rl'
 
@@ -143,8 +164,10 @@ function App() {
         let currentMatchKey = ''
         let roundStarted = false
         let matchOutcomeRecorded = false
-        let lastKnownBlueScore = 0
-        let lastKnownOrangeScore = 0
+        let peakKnownBlueScore = 0
+        let peakKnownOrangeScore = 0
+        let hadOpposingTeams = false
+        let lastKnownWinnerTeamNum = null
         
         while (true) {
           const { done, value } = await reader.read()
@@ -184,8 +207,10 @@ function App() {
                 currentMatchKey = message.Data?.MatchGuid || currentMatchKey || `match-${Date.now()}`
                 roundStarted = false
                 matchOutcomeRecorded = false
-                lastKnownBlueScore = 0
-                lastKnownOrangeScore = 0
+                peakKnownBlueScore = 0
+                peakKnownOrangeScore = 0
+                hadOpposingTeams = false
+                lastKnownWinnerTeamNum = null
               }
 
               if (message.Event === 'RoundStarted') {
@@ -202,8 +227,10 @@ function App() {
                 const snapshotPlayers = Array.isArray(latestStateData?.Players) ? latestStateData.Players : null
                 const players = eventPlayers || snapshotPlayers || []
 
-                const blueScore = teams.find((t) => t.TeamNum === 0)?.Score ?? 0
-                const orangeScore = teams.find((t) => t.TeamNum === 1)?.Score ?? 0
+                const eventBlueScore = teams.find((t) => t.TeamNum === 0)?.Score ?? 0
+                const eventOrangeScore = teams.find((t) => t.TeamNum === 1)?.Score ?? 0
+                const blueScore = Math.max(eventBlueScore, peakKnownBlueScore)
+                const orangeScore = Math.max(eventOrangeScore, peakKnownOrangeScore)
                 const matchKey = message.Data.MatchGuid || currentMatchKey || latestStateData?.Game?.MatchGuid || 'no-guid'
 
                 let playerTeamNum = trackedTeamNum
@@ -242,36 +269,41 @@ function App() {
 
               if (message.Event === 'MatchDestroyed') {
                 const matchKey = message.Data?.MatchGuid || currentMatchKey || latestStateData?.Game?.MatchGuid || 'no-guid'
-                const hadStarted = roundStarted || lastKnownBlueScore > 0 || lastKnownOrangeScore > 0
+                const hadStarted = roundStarted || peakKnownBlueScore > 0 || peakKnownOrangeScore > 0
                 const canResolvePlayerTeam = trackedTeamNum === 0 || trackedTeamNum === 1
 
-                if (!matchOutcomeRecorded && hadStarted && canResolvePlayerTeam) {
-                  const signature = `${matchKey}|destroyed|${lastKnownBlueScore}|${lastKnownOrangeScore}`
+                if (!matchOutcomeRecorded && hadStarted && canResolvePlayerTeam && hadOpposingTeams) {
+                  const signature = `${matchKey}|destroyed|${peakKnownBlueScore}|${peakKnownOrangeScore}`
                   if (signature !== lastMatchSignature) {
                     lastMatchSignature = signature
+                    const result = lastKnownWinnerTeamNum === 0 || lastKnownWinnerTeamNum === 1
+                      ? (lastKnownWinnerTeamNum === trackedTeamNum ? 'W' : 'L')
+                      : 'L'
 
                     if (isMounted) {
                       setSessionHistory((prev) => [
                         {
-                          id: `${Date.now()}-destroyed-${lastKnownBlueScore}-${lastKnownOrangeScore}`,
+                          id: `${Date.now()}-destroyed-${peakKnownBlueScore}-${peakKnownOrangeScore}`,
                           time: new Date().toLocaleTimeString(),
-                          blueScore: lastKnownBlueScore,
-                          orangeScore: lastKnownOrangeScore,
-                          result: 'L',
+                          blueScore: peakKnownBlueScore,
+                          orangeScore: peakKnownOrangeScore,
+                          result,
                         },
                         ...prev,
                       ].slice(0, 25))
                     }
 
-                    addDebugInfo(`Match destroyed early: counted as loss (${lastKnownBlueScore}-${lastKnownOrangeScore})`)
+                    addDebugInfo(`Match destroyed early: counted as ${result === 'W' ? 'win' : 'loss'} (${peakKnownBlueScore}-${peakKnownOrangeScore})`)
                   }
                 }
 
                 currentMatchKey = ''
                 roundStarted = false
                 matchOutcomeRecorded = false
-                lastKnownBlueScore = 0
-                lastKnownOrangeScore = 0
+                peakKnownBlueScore = 0
+                peakKnownOrangeScore = 0
+                hadOpposingTeams = false
+                lastKnownWinnerTeamNum = null
               }
                
               if (message.Event === 'UpdateState' && message.Data) {
@@ -279,9 +311,24 @@ function App() {
                 if (isMounted) {
                   latestStateData = message.Data
                   updateTrackedPlayer(message.Data)
+                  const statePlayers = Array.isArray(message.Data?.Players) ? message.Data.Players : []
                   const stateTeams = Array.isArray(message.Data?.Game?.Teams) ? message.Data.Game.Teams : []
-                  lastKnownBlueScore = stateTeams.find((t) => t.TeamNum === 0)?.Score ?? 0
-                  lastKnownOrangeScore = stateTeams.find((t) => t.TeamNum === 1)?.Score ?? 0
+                  const teamsPresent = new Set(
+                    statePlayers
+                      .map((p) => p?.TeamNum)
+                      .filter((teamNum) => teamNum === 0 || teamNum === 1)
+                  )
+                  if (teamsPresent.has(0) && teamsPresent.has(1)) {
+                    hadOpposingTeams = true
+                  }
+                  const liveBlueScore = stateTeams.find((t) => t.TeamNum === 0)?.Score ?? 0
+                  const liveOrangeScore = stateTeams.find((t) => t.TeamNum === 1)?.Score ?? 0
+                  peakKnownBlueScore = Math.max(peakKnownBlueScore, liveBlueScore)
+                  peakKnownOrangeScore = Math.max(peakKnownOrangeScore, liveOrangeScore)
+                  const detectedWinnerTeamNum = getWinnerTeamNumFromState(message.Data)
+                  if (detectedWinnerTeamNum === 0 || detectedWinnerTeamNum === 1) {
+                    lastKnownWinnerTeamNum = detectedWinnerTeamNum
+                  }
                   currentMatchKey = message.Data?.Game?.MatchGuid || currentMatchKey
                   const playerCount = message.Data.Players?.length || 0
                   if (updateStateCount % 20 === 0) {

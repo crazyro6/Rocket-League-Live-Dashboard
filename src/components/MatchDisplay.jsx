@@ -19,6 +19,11 @@ function getPlatformFromPrimaryId(primaryId) {
   return platform ? platform.toUpperCase() : ''
 }
 
+function getBoostValue(boostRaw) {
+  if (typeof boostRaw !== 'number' || Number.isNaN(boostRaw)) return 0
+  return Math.max(0, Math.min(100, Math.round(boostRaw)))
+}
+
 function getTrackerUrl(player) {
   const primaryId = player?.PrimaryId
   const name = player?.Name
@@ -69,6 +74,19 @@ const MatchDisplay = ({ match }) => {
       ))
   }
 
+  const renderBoostMeter = (player) => {
+    const boost = getBoostValue(player?.Boost)
+
+    return (
+      <div className="player-boost">
+        <div className="player-boost-label">Boost {boost}</div>
+        <div className="player-boost-track">
+          <div className="player-boost-fill" style={{ width: `${boost}%` }} />
+        </div>
+      </div>
+    )
+  }
+
   const renderTeam = (teamPlayers, teamScore, teamColor) => {
     const teamName = teamColor === 0 ? 'Blue Team' : 'Orange Team'
     const teamClassName = teamColor === 0 ? 'team-blue' : 'team-orange'
@@ -81,7 +99,10 @@ const MatchDisplay = ({ match }) => {
             teamPlayers.map((player, idx) => (
               <div key={player.PrimaryId || `${player.Name}-${idx}`} className="player">
                 <div className="player-header">
-                  <div className="player-name">{player.Name} <span className="player-platform">{getPlatformFromPrimaryId(player.PrimaryId)}</span></div>
+                  <div className="player-identity">
+                    <div className="player-name">{player.Name} <span className="player-platform">{getPlatformFromPrimaryId(player.PrimaryId)}</span></div>
+                    {renderBoostMeter(player)}
+                  </div>
                   <a
                     href={getTrackerUrl(player)}
                     target="_blank"
