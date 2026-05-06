@@ -110,7 +110,7 @@ function App() {
 
     const getWinnerTeamNumFromState = (stateData) => {
       const game = stateData?.Game
-      if (!game?.bHasWinner) return null
+      if (!game) return null
 
       const teams = Array.isArray(game.Teams) ? game.Teams : []
       const blueScore = teams.find((t) => t.TeamNum === 0)?.Score ?? 0
@@ -120,10 +120,12 @@ function App() {
         return blueScore > orangeScore ? 0 : 1
       }
 
-      const winnerName = typeof game.Winner === 'string' ? game.Winner.toLowerCase() : ''
-      const winnerTeam = teams.find((t) => typeof t?.Name === 'string' && t.Name.toLowerCase() === winnerName)
-      if (winnerTeam?.TeamNum === 0 || winnerTeam?.TeamNum === 1) {
-        return winnerTeam.TeamNum
+      if (game?.bHasWinner) {
+        const winnerName = typeof game.Winner === 'string' ? game.Winner.toLowerCase() : ''
+        const winnerTeam = teams.find((t) => typeof t?.Name === 'string' && t.Name.toLowerCase() === winnerName)
+        if (winnerTeam?.TeamNum === 0 || winnerTeam?.TeamNum === 1) {
+          return winnerTeam.TeamNum
+        }
       }
 
       return null
