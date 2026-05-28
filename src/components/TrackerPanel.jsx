@@ -1,71 +1,70 @@
-export default function TrackerPanel({ trackerProfile, mmrTracker, gameMode }) {
-  if (!trackerProfile) {
+export default function TrackerPanel({ player, trackerProfile, selectedPlaylistId }) {
+  const fallbackName = player?.Name || ''
+  const teamClass = player?.TeamNum === 0 ? 'team-blue' : player?.TeamNum === 1 ? 'team-orange' : ''
+
+  if (trackerProfile === undefined) {
     return (
-      <div className="tracker-panel-placeholder">
-        <div className="loading-text">Fetching player stats...</div>
+      <div className={`tracker-panel mini ${teamClass}`}>
+        <div className="player-name">{fallbackName || '…'}</div>
+        <div className="loading-text">Loading…</div>
       </div>
     )
   }
 
-  const userInfo = trackerProfile?.userInfo || {}
+  if (trackerProfile === null) {
+    return (
+      <div className={`tracker-panel mini ${teamClass}`}>
+        <div className="player-name">{fallbackName || '?'}</div>
+        <div className="loading-text">No tracker data</div>
+      </div>
+    )
+  }
+
   const platformInfo = trackerProfile?.platformInfo || {}
+  const handle = platformInfo.platformUserHandle || fallbackName
+
+  const selectedSegment = trackerProfile?.segments?.find(
+    (s) => s.type === 'playlist' && s.attributes?.playlistId === selectedPlaylistId
+  )
+  const tier = selectedSegment?.stats?.tier?.metadata?.name || 'Unranked'
+  const division = selectedSegment?.stats?.division?.metadata?.name || ''
+  const mmr = selectedSegment?.stats?.rating?.value
+  const tierIcon = selectedSegment?.stats?.tier?.metadata?.iconUrl
+
+  const overviewSeg = trackerProfile?.segments?.find((s) => s.type === 'overview')
+  const stat = (key) => overviewSeg?.stats?.[key]?.displayValue || '—'
 
   return (
-    <div className="tracker-panel">
-      <div className="tracker-header">
-        <div className="player-info">
-          <h3 className="player-name">{platformInfo.platformUserHandle}</h3>
-          <p className="player-region">
-            {userInfo.countryCode ? `🌍 ${userInfo.countryCode}` : 'Region unknown'}
-          </p>
-        </div>
-      </div>
-
-      {mmrTracker && (
-        <div className="mmr-section">
-          <div className="mmr-title">{mmrTracker.mode}</div>
-          <div className="mmr-display">
-            <div className="mmr-box">
-              <div className="mmr-label">Starting MMR</div>
-              <div className="mmr-value">{mmrTracker.startMMR}</div>
-              {mmrTracker.tierIcon && <img src={mmrTracker.tierIcon} alt={mmrTracker.tier} className="tier-icon" />}
-              <div className="tier-name">{mmrTracker.tier}</div>
-            </div>
-            <div className="mmr-arrow">→</div>
-            <div className="mmr-box current">
-              <div className="mmr-label">Current MMR</div>
-              <div className={`mmr-value ${mmrTracker.change > 0 ? 'gain' : mmrTracker.change < 0 ? 'loss' : ''}`}>
-                {mmrTracker.currentMMR}
-              </div>
-              <div className={`mmr-change ${mmrTracker.change > 0 ? 'gain' : mmrTracker.change < 0 ? 'loss' : ''}`}>
-                {mmrTracker.change > 0 ? '+' : ''}{mmrTracker.change}
-              </div>
-            </div>
+    <div className={`tracker-panel mini ${teamClass}`}>
+      <div className="tracker-row">
+        {tierIcon ? (
+          <img src={tierIcon} alt={tier} className="rank-icon" />
+        ) : (
+          <div className="rank-icon rank-icon-placeholder" />
+        )}
+        <div className="tracker-meta">
+          <div className="player-name">{handle}</div>
+          <div className="rank-line">
+            <span className="rank-tier">{tier}</span>
+            {division && <span className="rank-div">{division}</span>}
+            {mmr != null && <span className="rank-mmr">{mmr} MMR</span>}
           </div>
         </div>
-      )}
-
-      <div className="tracker-stats">
-        <h4>Lifetime Stats</h4>
-        <div className="stats-grid">
-          {[
-            { label: 'Wins', key: 'wins' },
-            { label: 'Goals', key: 'goals' },
-            { label: 'Saves', key: 'saves' },
-            { label: 'Assists', key: 'assists' },
-            { label: 'MVPs', key: 'mVPs' },
-            { label: 'Goal/Shot %', key: 'goalShotRatio' }
-          ].map((stat) => {
-            const overviewSeg = trackerProfile?.segments?.find((s) => s.type === 'overview')
-            const value = overviewSeg?.stats?.[stat.key]?.displayValue || '—'
-            return (
-              <div key={stat.key} className="stat-item">
-                <span className="stat-label">{stat.label}</span>
-                <span className="stat-value">{value}</span>
-              </div>
-            )
-          })}
-        </div>
+      </div>
+      <div className="stats-grid">
+        {[
+          { label: 'Wins', key: 'wins' },
+          { label: 'Goals', key: 'goals' },
+          { label: 'Saves', key: 'saves' },
+          { label: 'Assists', key: 'assists' },
+          { label: 'MVPs', key: 'mVPs' },
+          { label: 'Shot %', key: 'goalShotRatio' },
+        ].map((s) => (
+          <div key={s.key} className="stat-item">
+            <span className="stat-label">{s.label}</span>
+            <span className="stat-value">{stat(s.key)}</span>
+          </div>
+        ))}
       </div>
     </div>
   )

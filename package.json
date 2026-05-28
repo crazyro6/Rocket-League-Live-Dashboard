@@ -12,9 +12,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "cheerio": "^1.2.0",
     "node-fetch": "^2.7.0",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "trn-rocket-league": "^2.6.9"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

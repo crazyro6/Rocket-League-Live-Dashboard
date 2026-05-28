@@ -1,10 +1,94 @@
 import http from 'http'
 import net from 'net'
 import fetch from 'node-fetch'
+import { spawn } from 'child_process'
 
 const API_HOST = '127.0.0.1'
 const API_PORT = 49123
 const PROXY_PORT = 3001
+
+const TRACKER_BASE = 'https://api.tracker.gg/api/v2/rocket-league/standard/profile'
+const TRACKER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+const TRACKER_REFERER = 'https://rocketleague.tracker.network/'
+
+// Map our internal platform slug → tracker.gg API platform segment
+const TRACKER_PLATFORM_MAP = {
+  epic: 'epic',
+  steam: 'steam',
+  psn: 'psn',
+  playstation: 'psn',
+  ps4: 'psn',
+  ps5: 'psn',
+  xbox: 'xbl',
+  xbl: 'xbl',
+  switch: 'switch',
+}
+
+// Use system curl to defeat Cloudflare's JA3/TLS fingerprinting that blocks
+// node-fetch. Requires curl in PATH (Windows 10+, macOS, Linux all ship it).
+function curlJson(url) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-s',
+      '-S',
+      '--compressed',
+      '-w', '\n__HTTP_STATUS__:%{http_code}',
+      '-A', TRACKER_UA,
+      '-H', 'Accept: application/json, text/plain, */*',
+      '-H', 'Accept-Language: en-US,en;q=0.9',
+      '-H', `Origin: ${TRACKER_REFERER.replace(/\/$/, '')}`,
+      '-H', `Referer: ${TRACKER_REFERER}`,
+      url,
+    ]
+    const proc = spawn('curl', args, { windowsHide: true })
+    let stdout = ''
+    let stderr = ''
+    proc.stdout.on('data', (b) => { stdout += b.toString('utf8') })
+    proc.stderr.on('data', (b) => { stderr += b.toString('utf8') })
+    proc.on('error', (err) => reject(new Error(`curl failed to start: ${err.message}`)))
+    proc.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`curl exited ${code}: ${stderr.trim() || 'no stderr'}`))
+      const m = stdout.match(/\n__HTTP_STATUS__:(\d+)\s*$/)
+      const status = m ? parseInt(m[1], 10) : 0
+      const body = m ? stdout.slice(0, m.index) : stdout
+      resolve({ status, body })
+    })
+  })
+}
+
+async function fetchTrackerProfile(platform, identifier) {
+  const url = `${TRACKER_BASE}/${platform}/${encodeURIComponent(identifier)}`
+  console.log(`[TRACKER] GET ${url}`)
+  const { status, body } = await curlJson(url)
+
+  if (status === 404) {
+    const err = new Error('Player not found on tracker.gg')
+    err.status = 404
+    throw err
+  }
+  if (status < 200 || status >= 300) {
+    const err = new Error(`Upstream HTTP ${status}`)
+    err.status = status
+    throw err
+  }
+
+  let json
+  try {
+    json = JSON.parse(body)
+  } catch (e) {
+    const err = new Error(`Non-JSON response from tracker.gg: ${body.slice(0, 100)}`)
+    err.status = 502
+    throw err
+  }
+  if (json?.errors?.length) {
+    const msg = json.errors[0]?.message || 'tracker.gg error'
+    const err = new Error(msg)
+    err.status = 502
+    throw err
+  }
+  // Unwrap { data: {...} } envelope — the front expects the inner shape
+  return json?.data ?? json
+}
 
 const server = http.createServer((req, res) => {
   console.log(`\n[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`)
@@ -96,53 +180,39 @@ const server = http.createServer((req, res) => {
       socket.destroy()
     })
   } else if (req.url.startsWith('/tracker/')) {
-    // Tracker API relay endpoint: /tracker/platform/username
-    // Fetches fresh data per match (no caching) for live MMR updates
-    const parts = req.url.split('/')
-    const platform = parts[2]?.toLowerCase()
-    const username = parts[3]
+    // /tracker/<platform>/<identifier>
+    // Proxies tracker.gg's internal API. For Steam, <identifier> must be the
+    // SteamID64; for epic/psn/xbox, the display name works.
+    const parts = req.url.split('/').filter(Boolean) // ['tracker', plat, ident]
+    const rawPlatform = (parts[1] || '').toLowerCase()
+    const identifier = parts[2] ? decodeURIComponent(parts[2]) : ''
+    const platform = TRACKER_PLATFORM_MAP[rawPlatform]
 
-    console.log(`[TRACKER] Incoming: platform=${platform}, username=${username}`)
+    console.log(`[TRACKER] Incoming: rawPlatform=${rawPlatform} → ${platform}, identifier=${identifier}`)
 
-    if (!platform || !username) {
-      console.log(`[TRACKER] Invalid params`)
-      res.writeHead(400, { 'Access-Control-Allow-Origin': '*' })
-      res.end(JSON.stringify({ error: 'Invalid tracker params' }))
+    if (!platform || !identifier) {
+      res.writeHead(400, {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json',
+      })
+      res.end(JSON.stringify({ error: `Invalid platform or identifier (got ${rawPlatform}/${identifier})` }))
       return
     }
 
-    // Fetch fresh from Tracker API
-    const trackerUrl = `https://api.tracker.gg/api/v2/rocket-league/standard/profile/${platform}/${encodeURIComponent(username)}`
-    console.log(`[TRACKER] Fetching: ${trackerUrl}`)
-
-    fetch(trackerUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://tracker.gg/',
-        'Origin': 'https://tracker.gg'
-      }
-    })
-      .then((response) => {
-        console.log(`[TRACKER] Response status: ${response.status}`)
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
-        }
-        return response.json()
-      })
+    fetchTrackerProfile(platform, identifier)
       .then((data) => {
-        console.log(`[TRACKER] Got data, sending to client`)
         res.writeHead(200, {
           'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         })
         res.end(JSON.stringify(data))
       })
       .catch((err) => {
         console.error(`[TRACKER] Error: ${err.message}`)
-        res.writeHead(500, {
+        const status = err.status || 500
+        res.writeHead(status, {
           'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         })
         res.end(JSON.stringify({ error: err.message }))
       })
