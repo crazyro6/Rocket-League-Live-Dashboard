@@ -1,5 +1,6 @@
 import http from 'http'
 import net from 'net'
+import fetch from 'node-fetch'
 
 const API_HOST = '127.0.0.1'
 const API_PORT = 49123
@@ -94,6 +95,57 @@ const server = http.createServer((req, res) => {
       console.error(`  ✗ Request error: ${err.message}`)
       socket.destroy()
     })
+  } else if (req.url.startsWith('/tracker/')) {
+    // Tracker API relay endpoint: /tracker/platform/username
+    // Fetches fresh data per match (no caching) for live MMR updates
+    const parts = req.url.split('/')
+    const platform = parts[2]?.toLowerCase()
+    const username = parts[3]
+
+    console.log(`[TRACKER] Incoming: platform=${platform}, username=${username}`)
+
+    if (!platform || !username) {
+      console.log(`[TRACKER] Invalid params`)
+      res.writeHead(400, { 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({ error: 'Invalid tracker params' }))
+      return
+    }
+
+    // Fetch fresh from Tracker API
+    const trackerUrl = `https://api.tracker.gg/api/v2/rocket-league/standard/profile/${platform}/${encodeURIComponent(username)}`
+    console.log(`[TRACKER] Fetching: ${trackerUrl}`)
+
+    fetch(trackerUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://tracker.gg/',
+        'Origin': 'https://tracker.gg'
+      }
+    })
+      .then((response) => {
+        console.log(`[TRACKER] Response status: ${response.status}`)
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+        return response.json()
+      })
+      .then((data) => {
+        console.log(`[TRACKER] Got data, sending to client`)
+        res.writeHead(200, {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json'
+        })
+        res.end(JSON.stringify(data))
+      })
+      .catch((err) => {
+        console.error(`[TRACKER] Error: ${err.message}`)
+        res.writeHead(500, {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json'
+        })
+        res.end(JSON.stringify({ error: err.message }))
+      })
   } else {
     console.log(`  ✗ Unknown path: ${req.url}`)
     res.writeHead(404, {
@@ -101,6 +153,7 @@ const server = http.createServer((req, res) => {
     })
     res.end('Not found')
   }
+
 })
 
 server.listen(PROXY_PORT, '0.0.0.0', () => {

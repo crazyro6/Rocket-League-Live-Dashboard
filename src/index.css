@@ -59,11 +59,11 @@ body {
 }
 
 #root {
-  width: 1126px;
+  width: 100%;
   max-width: 100%;
-  margin: 0 auto;
+  margin: 0;
   padding: 0;
-  border-inline: 1px solid var(--border);
+  border-inline: none;
   min-height: 100svh;
   display: flex;
   flex-direction: column;
@@ -116,9 +116,11 @@ code {
 
 /* App container */
 .app-container {
+  width: 100%;
   max-width: 100%;
-  padding: 20px;
+  padding: 20px 40px;
   flex: 1;
+  box-sizing: border-box;
 }
 
 .app-container h1 {

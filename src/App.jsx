@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 import MatchDisplay from './components/MatchDisplay'
+import TrackerPanel from './components/TrackerPanel'
 
 function extractMessages(buffer) {
   const messages = []
@@ -52,6 +53,9 @@ function App() {
   const [debugInfo, setDebugInfo] = useState([])
   const [sessionHistory, setSessionHistory] = useState([])
   const [sessionStartedAt] = useState(() => new Date())
+  const [trackerProfile, setTrackerProfile] = useState(null)
+  const [mmrTracker, setMmrTracker] = useState(null)
+  const [gameMode, setGameMode] = useState(null)
 
   const addDebugInfo = (msg) => {
     console.log(msg)
@@ -131,6 +135,90 @@ function App() {
       return null
     }
 
+    const detectGameMode = (stateData) => {
+      // Detect game mode based on player count
+      const players = Array.isArray(stateData?.Players) ? stateData.Players : []
+      const playerCount = players.length
+
+      // Map player count to mode
+      // 2 players = 1v1, 4 = 2v2, 6 = 3v3
+      if (playerCount === 2) return { name: '1v1 Duel', playlistId: 10 }
+      if (playerCount === 4) return { name: '2v2 Doubles', playlistId: 11 }
+      if (playerCount === 6) return { name: '3v3 Standard', playlistId: 13 }
+
+      return null
+    }
+
+    const fetchTrackerProfile = async (playerName, platform) => {
+      try {
+        console.log(`Fetching Tracker: ${platform}/${playerName}`)
+        const response = await fetch(`/tracker/${platform}/${playerName}`)
+        const text = await response.text()
+
+        console.log('Tracker response status:', response.status)
+        console.log('Tracker response text:', text.substring(0, 500))
+
+        if (!response.ok) {
+          console.warn(`Tracker API error ${response.status}:`, text)
+          return null
+        }
+
+        let result
+        try {
+          result = JSON.parse(text)
+        } catch (e) {
+          console.error('Failed to parse JSON:', e.message, 'Raw:', text.substring(0, 200))
+          return null
+        }
+
+        if (result.errors) {
+          console.warn('Tracker errors:', result.errors)
+          return null
+        }
+
+        // Response might be { data: {...} } or just {...}
+        return result.data || result
+      } catch (err) {
+        console.error('Tracker fetch error:', err.message)
+        return null
+      }
+    }
+
+    const getPlatformFromPrimaryId = (primaryId) => {
+      const platformRaw = (primaryId?.split('|')[0] || '').toLowerCase()
+      const PLATFORM_MAP = {
+        epic: 'epic',
+        steam: 'steam',
+        psn: 'psn',
+        playstation: 'psn',
+        ps4: 'psn',
+        ps5: 'psn',
+        xbox: 'xbox',
+        xbl: 'xbox',
+      }
+      return PLATFORM_MAP[platformRaw] || platformRaw
+    }
+
+    const findMMRForGameMode = (trackerData, playlistId) => {
+      if (!trackerData?.segments || !Array.isArray(trackerData.segments)) {
+        return null
+      }
+
+      const playlistSegment = trackerData.segments.find(
+        (seg) => seg.type === 'playlist' && seg.attributes?.playlistId === playlistId
+      )
+
+      if (!playlistSegment?.stats?.rating) {
+        return null
+      }
+
+      return {
+        current: playlistSegment.stats.rating.value || 0,
+        tier: playlistSegment.stats.tier?.displayValue || 'Unranked',
+        tierIcon: playlistSegment.stats.tier?.metadata?.iconUrl || null
+      }
+    }
+
     const connectToAPI = async () => {
       const apiUrl = '/rl'
 
@@ -170,6 +258,9 @@ function App() {
         let peakKnownOrangeScore = 0
         let hadOpposingTeams = false
         let lastKnownWinnerTeamNum = null
+        let trackerFetchedForMatch = false
+        let currentGameMode = null
+        let matchStartMMR = null
         
         while (true) {
           const { done, value } = await reader.read()
@@ -213,6 +304,9 @@ function App() {
                 peakKnownOrangeScore = 0
                 hadOpposingTeams = false
                 lastKnownWinnerTeamNum = null
+                trackerFetchedForMatch = false
+                currentGameMode = null
+                matchStartMMR = null
               }
 
               if (message.Event === 'RoundStarted') {
@@ -332,6 +426,66 @@ function App() {
                     lastKnownWinnerTeamNum = detectedWinnerTeamNum
                   }
                   currentMatchKey = message.Data?.Game?.MatchGuid || currentMatchKey
+
+                  // Fetch tracker profile once per match (on first UpdateState with valid player)
+                  if (!trackerFetchedForMatch && trackedPlayerName) {
+                    trackerFetchedForMatch = true
+                    const trackedPlayer = findTrackedPlayer(statePlayers)
+                    addDebugInfo(`Tracker fetch triggered. Player: ${trackedPlayer?.Name || 'unknown'}`)
+                    if (trackedPlayer?.PrimaryId && trackedPlayer?.Name) {
+                      const platform = getPlatformFromPrimaryId(trackedPlayer.PrimaryId)
+                      addDebugInfo(`Fetching Tracker for ${trackedPlayer.Name} (${platform})`)
+                      fetchTrackerProfile(trackedPlayer.Name, platform).then((profileData) => {
+                        addDebugInfo(`Tracker fetch complete. Got data: ${profileData ? 'yes' : 'no'}`)
+                        if (isMounted && profileData) {
+                          setTrackerProfile(profileData)
+                          
+                          // Detect game mode and get starting MMR
+                          const detectedMode = detectGameMode(message.Data)
+                          if (detectedMode) {
+                            setGameMode(detectedMode)
+                            const mmr = findMMRForGameMode(profileData, detectedMode.playlistId)
+                            if (mmr) {
+                              matchStartMMR = mmr
+                              setMmrTracker({
+                                mode: detectedMode.name,
+                                startMMR: mmr.current,
+                                currentMMR: mmr.current,
+                                change: 0,
+                                tier: mmr.tier,
+                                tierIcon: mmr.tierIcon
+                              })
+                              addDebugInfo(`Loaded ${detectedMode.name}: ${mmr.current} MMR`)
+                            } else {
+                              addDebugInfo(`No MMR found for ${detectedMode.name} (might be freeplay/unranked)`)
+                            }
+                          } else {
+                            addDebugInfo(`Could not detect game mode (${statePlayers.length} players)`)
+                          }
+                        } else {
+                          addDebugInfo(`Profile data was null or not mounted`)
+                        }
+                      })
+                    } else {
+                      addDebugInfo(`No PrimaryId/name data: ${trackedPlayer?.PrimaryId}/${trackedPlayer?.Name}`)
+                    }
+                  }
+
+                  // Update MMR tracker with current live MMR if we have tracker data
+                  if (matchStartMMR && trackerProfile && isMounted) {
+                    const currentMode = detectGameMode(message.Data)
+                    if (currentMode) {
+                      const currentMMR = findMMRForGameMode(trackerProfile, currentMode.playlistId)
+                      if (currentMMR) {
+                        setMmrTracker((prev) => ({
+                          ...prev,
+                          currentMMR: currentMMR.current,
+                          change: currentMMR.current - matchStartMMR.current
+                        }))
+                      }
+                    }
+                  }
+
                   const playerCount = message.Data.Players?.length || 0
                   if (updateStateCount % 20 === 0) {
                     addDebugInfo(`✓ UpdateState #${updateStateCount}: ${playerCount} players`)
@@ -405,9 +559,20 @@ function App() {
       
       {matchData ? (
         <>
-          <MatchDisplay match={matchData} />
-          <div className="status-indicator connected">
-            <span>●</span> Live
+          <div className="main-content">
+            <div className="match-section">
+              <MatchDisplay match={matchData} />
+              <div className="status-indicator connected">
+                <span>●</span> Live
+              </div>
+            </div>
+            <div className="tracker-section">
+              <TrackerPanel 
+                trackerProfile={trackerProfile} 
+                mmrTracker={mmrTracker}
+                gameMode={gameMode}
+              />
+            </div>
           </div>
           <div className="session-card">
             <div className="session-header">
