@@ -75,7 +75,12 @@ const MatchDisplay = ({ match }) => {
   }
 
   const renderBoostMeter = (player) => {
-    const boost = getBoostValue(player?.Boost)
+    // Boost is only sent for the local player's own team (it's a SPECTATOR
+    // field), so opponents have no Boost while you're playing. Hide the bar when
+    // there's no real value instead of showing a misleading "0".
+    if (typeof player?.Boost !== 'number' || Number.isNaN(player.Boost)) return null
+
+    const boost = getBoostValue(player.Boost)
 
     return (
       <div className="player-boost">

@@ -8,18 +8,11 @@ export default defineConfig({
     host: 'localhost',
     port: 5173,
     proxy: {
+      // Dev only: forward /rl and /tracker to the Node proxy. In production the
+      // proxy serves the built app on the same origin, so no rewrite is needed.
       '/rl': {
         target: 'http://127.0.0.1:3001',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/rl/, ''),
-        configure: (proxy, options) => {
-          proxy.on('error', (err, req, res) => {
-            console.error('Proxy error:', err)
-          })
-          proxy.on('proxyRes', (proxyRes, req, res) => {
-            console.log('Proxy response:', proxyRes.statusCode)
-          })
-        }
       },
       '/tracker': {
         target: 'http://127.0.0.1:3001',

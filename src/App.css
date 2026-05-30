@@ -269,6 +269,30 @@
   color: var(--text);
 }
 
+.session-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-reset {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.session-reset:hover {
+  border-color: var(--accent, #aa3bff);
+  color: var(--accent, #aa3bff);
+  background: var(--accent-bg, rgba(170, 59, 255, 0.12));
+}
+
 .session-summary {
   display: flex;
   gap: 14px;
@@ -296,7 +320,8 @@
 
 .session-item {
   display: grid;
-  grid-template-columns: 90px 80px 1fr;
+  grid-template-columns: 78px 64px 1fr 52px;
+  align-items: center;
   gap: 10px;
   font-size: 12px;
   background: var(--surface);
@@ -305,10 +330,168 @@
   padding: 7px 9px;
 }
 
+.mmr-delta {
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+.mmr-pos {
+  color: #22c55e;
+}
+
+.mmr-neg {
+  color: #ef4444;
+}
+
+.session-mmr {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .session-empty {
   font-size: 12px;
   color: var(--text);
   opacity: 0.85;
+}
+
+/* Session stats strip */
+.session-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.sstat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.sstat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  opacity: 0.6;
+}
+
+.sstat-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+}
+
+.sstat-value em {
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  opacity: 0.55;
+}
+
+/* MMR sparkline */
+.mmr-graph {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.mmr-graph-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.mmr-graph-range {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.mmr-spark {
+  display: block;
+}
+
+/* Live match feed */
+.event-feed {
+  margin-top: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.event-feed-head {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.7;
+  margin-bottom: 8px;
+}
+
+.event-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.feed-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+  border-left: 3px solid transparent;
+}
+
+.feed-item.team-blue {
+  border-left-color: #0066cc;
+}
+
+.feed-item.team-orange {
+  border-left-color: #ff8800;
+}
+
+.feed-item.mine {
+  background: var(--accent-bg, rgba(170, 59, 255, 0.12));
+}
+
+.feed-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.feed-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-h);
+}
+
+.feed-item.mine .feed-text {
+  font-weight: 700;
+}
+
+.feed-detail {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Responsive for mobile */
@@ -435,6 +618,8 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  cursor: pointer;
+  position: relative;
 }
 
 .tracker-panel.mini.team-blue {
@@ -443,6 +628,36 @@
 
 .tracker-panel.mini.team-orange {
   border-left-color: #ff8800;
+}
+
+/* "Me" highlight */
+.tracker-panel.mini.is-me {
+  outline: 1px solid var(--accent, #aa3bff);
+  background: rgba(170, 59, 255, 0.07);
+}
+
+.player-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.player-name-row .player-name {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.me-badge {
+  flex-shrink: 0;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: var(--accent, #aa3bff);
+  border-radius: 4px;
+  padding: 1px 4px;
+  line-height: 1.3;
 }
 
 .tracker-row {

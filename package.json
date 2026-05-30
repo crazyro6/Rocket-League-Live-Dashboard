@@ -4,9 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"npm run proxy\" \"vite\"",
     "proxy": "node proxy.js",
-    "start": "concurrently \"npm run proxy\" \"npm run dev\"",
+    "serve": "node proxy.js",
+    "app": "vite build && node proxy.js",
+    "start": "concurrently \"npm run proxy\" \"vite\"",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

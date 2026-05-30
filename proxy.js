@@ -2,10 +2,62 @@ import http from 'http'
 import net from 'net'
 import fetch from 'node-fetch'
 import { spawn } from 'child_process'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
 const API_HOST = '127.0.0.1'
 const API_PORT = 49123
 const PROXY_PORT = 3001
+
+// Serve the production build (npm run build) so the whole app runs from this
+// single process on http://localhost:3001 — no Vite dev server needed.
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const DIST_DIR = path.join(__dirname, 'dist')
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json; charset=utf-8',
+}
+
+function serveStatic(req, res) {
+  let urlPath = decodeURIComponent((req.url || '/').split('?')[0])
+  if (urlPath === '/') urlPath = '/index.html'
+  const filePath = path.join(DIST_DIR, path.normalize(urlPath))
+  // Prevent path traversal outside dist/
+  if (!filePath.startsWith(DIST_DIR)) {
+    res.writeHead(403)
+    res.end('Forbidden')
+    return
+  }
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      // SPA fallback → index.html (also the "not built yet" message)
+      fs.readFile(path.join(DIST_DIR, 'index.html'), (e2, html) => {
+        if (e2) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('App not built yet. Run: npm run build')
+          return
+        }
+        res.writeHead(200, { 'Content-Type': MIME['.html'] })
+        res.end(html)
+      })
+      return
+    }
+    const ext = path.extname(filePath).toLowerCase()
+    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' })
+    res.end(data)
+  })
+}
 
 const TRACKER_BASE = 'https://api.tracker.gg/api/v2/rocket-league/standard/profile'
 const TRACKER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -107,7 +159,9 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  if (req.url === '/' || req.url === '/api' || req.url === '/api/') {
+  const reqPath = (req.url || '/').split('?')[0]
+
+  if (reqPath === '/rl' || reqPath === '/api') {
     console.log('  → Sending 200 with headers and streaming response')
     res.writeHead(200, {
       'Access-Control-Allow-Origin': '*',
@@ -217,11 +271,8 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: err.message }))
       })
   } else {
-    console.log(`  ✗ Unknown path: ${req.url}`)
-    res.writeHead(404, {
-      'Access-Control-Allow-Origin': req.headers.origin || '*'
-    })
-    res.end('Not found')
+    // Everything else → the built front-end (dist/), with SPA fallback.
+    serveStatic(req, res)
   }
 
 })

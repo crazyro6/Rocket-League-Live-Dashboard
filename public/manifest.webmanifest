@@ -1,0 +1,13 @@
+{
+  "name": "Rocket League Stats",
+  "short_name": "RL Stats",
+  "description": "Live Rocket League match stats, ranks and session MMR tracking.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#16171d",
+  "theme_color": "#aa3bff",
+  "icons": [
+    { "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

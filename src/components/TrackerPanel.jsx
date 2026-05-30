@@ -1,11 +1,26 @@
-export default function TrackerPanel({ player, trackerProfile, selectedPlaylistId }) {
+export default function TrackerPanel({ player, trackerProfile, selectedPlaylistId, isMe, onSelectMe }) {
   const fallbackName = player?.Name || ''
   const teamClass = player?.TeamNum === 0 ? 'team-blue' : player?.TeamNum === 1 ? 'team-orange' : ''
+  const primaryId = player?.PrimaryId
+
+  const rootClass = `tracker-panel mini ${teamClass} ${isMe ? 'is-me' : ''}`
+  const selectMe = () => {
+    if (primaryId && onSelectMe) onSelectMe(primaryId)
+  }
+  // Title hint so users discover the click-to-set-me action.
+  const meTitle = isMe ? 'This is you' : 'Click to mark this player as you'
+
+  const nameRow = (name) => (
+    <div className="player-name-row">
+      <span className="player-name">{name}</span>
+      {isMe && <span className="me-badge">YOU</span>}
+    </div>
+  )
 
   if (trackerProfile === undefined) {
     return (
-      <div className={`tracker-panel mini ${teamClass}`}>
-        <div className="player-name">{fallbackName || '…'}</div>
+      <div className={rootClass} onClick={selectMe} title={meTitle}>
+        {nameRow(fallbackName || '…')}
         <div className="loading-text">Loading…</div>
       </div>
     )
@@ -13,8 +28,8 @@ export default function TrackerPanel({ player, trackerProfile, selectedPlaylistI
 
   if (trackerProfile === null) {
     return (
-      <div className={`tracker-panel mini ${teamClass}`}>
-        <div className="player-name">{fallbackName || '?'}</div>
+      <div className={rootClass} onClick={selectMe} title={meTitle}>
+        {nameRow(fallbackName || '?')}
         <div className="loading-text">No tracker data</div>
       </div>
     )
@@ -35,7 +50,7 @@ export default function TrackerPanel({ player, trackerProfile, selectedPlaylistI
   const stat = (key) => overviewSeg?.stats?.[key]?.displayValue || '—'
 
   return (
-    <div className={`tracker-panel mini ${teamClass}`}>
+    <div className={rootClass} onClick={selectMe} title={meTitle}>
       <div className="tracker-row">
         {tierIcon ? (
           <img src={tierIcon} alt={tier} className="rank-icon" />
@@ -43,7 +58,7 @@ export default function TrackerPanel({ player, trackerProfile, selectedPlaylistI
           <div className="rank-icon rank-icon-placeholder" />
         )}
         <div className="tracker-meta">
-          <div className="player-name">{handle}</div>
+          {nameRow(handle)}
           <div className="rank-line">
             <span className="rank-tier">{tier}</span>
             {division && <span className="rank-div">{division}</span>}
