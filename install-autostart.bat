@@ -7,12 +7,14 @@ set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "LNK=%STARTUP%\RL Stats Server.lnk"
 
 echo Installing auto-start...
-powershell -NoProfile -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%LNK%'); $s.TargetPath='%VBS%'; $s.WorkingDirectory='%~dp0'; $s.Description='RL Stats local server'; $s.Save()"
+rem Point the shortcut at wscript.exe explicitly (with the .vbs as an argument)
+rem so it never depends on the system's .vbs file association.
+powershell -NoProfile -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%LNK%'); $s.TargetPath='%SystemRoot%\System32\wscript.exe'; $s.Arguments='\"%VBS%\"'; $s.WorkingDirectory='%~dp0'; $s.Description='RL Stats local server'; $s.Save()"
 
 if exist "%LNK%" (
   echo Done. The server will start hidden every time you log in.
   echo Starting it now...
-  start "" "%VBS%"
+  wscript.exe "%VBS%"
   timeout /t 2 >nul
   echo.
   echo You can now open the app at http://localhost:3001

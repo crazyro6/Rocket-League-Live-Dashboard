@@ -536,8 +536,17 @@ function App() {
         while (true) {
           const { done, value } = await reader.read()
           if (done) {
-            addDebugInfo('Stream ended')
-            break
+            // The relay closed the stream — almost always because the game's
+            // Stats API socket isn't sending yet (RL not in a match, just
+            // launched, or it dropped the socket between matches). A clean end
+            // must reconnect too; otherwise the app sits "connected" forever and
+            // only a manual refresh revives it.
+            addDebugInfo('Stream ended — reconnecting...')
+            setConnectionStatus('connecting')
+            setTimeout(() => {
+              if (isMounted) connectToAPI()
+            }, 2000)
+            return
           }
 
           buffer += decoder.decode(value, { stream: true })
