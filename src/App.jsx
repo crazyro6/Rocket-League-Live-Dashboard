@@ -110,6 +110,8 @@ function App() {
   const [mmrSeries, setMmrSeries] = useState(() => bootSession?.mmrSeries || {})
   // Live match event feed (goals, saves, demos…). Ephemeral, not persisted.
   const [eventFeed, setEventFeed] = useState([])
+  // Whether the live feed is expanded (user can collapse it).
+  const [feedCollapsed, setFeedCollapsed] = useState(false)
   // Live MMR baseline per playlist, shared with the stream loop so deltas keep
   // computing correctly after a refresh (seeded from the restored session).
   const [initialMmrTrack] = useState(() => {
@@ -411,6 +413,12 @@ function App() {
       })
     }
 
+    // A single ranked match never swings MMR more than this. A larger jump means
+    // a bad baseline (stale tracker.gg cache, a wrong-playlist read, or several
+    // matches' updates merged) — resync the running MMR but DON'T pin a bogus
+    // +/-100 onto a match row.
+    const MAX_MATCH_MMR_DELTA = 50
+
     const processMmrReading = (playlistId, mmr) => {
       if (playlistId == null || typeof mmr !== 'number' || mmr <= 0) return
       const track = mmrTrack.get(playlistId)
@@ -425,7 +433,12 @@ function App() {
       if (mmr === track.current) return
       const delta = mmr - track.current
       track.current = mmr
-      attributeMmrDelta(playlistId, delta)
+      // Only attribute plausible per-match swings; huge jumps are data glitches.
+      if (Math.abs(delta) <= MAX_MATCH_MMR_DELTA) {
+        attributeMmrDelta(playlistId, delta)
+      } else {
+        addDebugInfo(`MMR jump ${delta > 0 ? '+' : ''}${delta} ignored (baseline resync)`)
+      }
       pushMmrSessionState(playlistId, track)
       pushMmrSeriesPoint(playlistId, mmr)
     }
@@ -930,19 +943,31 @@ function App() {
               </div>
               {eventFeed.length > 0 && (
                 <div className="event-feed">
-                  <div className="event-feed-head">Match feed</div>
-                  <div className="event-feed-list">
-                    {eventFeed.map((e) => (
-                      <div
-                        key={e.id}
-                        className={`feed-item ${e.teamNum === 0 ? 'team-blue' : e.teamNum === 1 ? 'team-orange' : ''} ${e.mine ? 'mine' : ''}`}
-                      >
-                        <span className="feed-icon">{e.icon}</span>
-                        <span className="feed-text">{e.text}</span>
-                        {e.detail && <span className="feed-detail">{e.detail}</span>}
-                      </div>
-                    ))}
-                  </div>
+                  <button
+                    type="button"
+                    className="event-feed-head"
+                    onClick={() => setFeedCollapsed((c) => !c)}
+                    aria-expanded={!feedCollapsed}
+                    title={feedCollapsed ? 'Show match feed' : 'Hide match feed'}
+                  >
+                    <span className="feed-toggle-caret">{feedCollapsed ? '▸' : '▾'}</span>
+                    Match feed
+                    <span className="feed-count">{eventFeed.length}</span>
+                  </button>
+                  {!feedCollapsed && (
+                    <div className="event-feed-list">
+                      {eventFeed.map((e) => (
+                        <div
+                          key={e.id}
+                          className={`feed-item ${e.teamNum === 0 ? 'team-blue' : e.teamNum === 1 ? 'team-orange' : ''} ${e.mine ? 'mine' : ''}`}
+                        >
+                          <span className="feed-icon">{e.icon}</span>
+                          <span className="feed-text">{e.text}</span>
+                          {e.detail && <span className="feed-detail">{e.detail}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -195,16 +195,9 @@ const server = http.createServer((req, res) => {
       if (dataCount % 5 === 0) {
         console.log(`  ✓ Received chunk ${dataCount}: ${chunk.length} bytes`)
       }
-      
-      // Try to write to response
-      try {
-        const ok = res.write(chunk)
-        if (!ok && dataCount === 1) {
-          console.log(`  ⚠ Response buffer full on first chunk`)
-        }
-      } catch (e) {
-        console.error(`  ✗ Write error on chunk ${dataCount}:`, e.message)
-      }
+      // NOTE: do NOT res.write(chunk) here — socket.pipe(res) below already
+      // forwards every chunk. Writing here too sent each message twice, which
+      // made every match event (goals, demos, saves…) show up duplicated.
     })
 
     socket.on('error', (err) => {
