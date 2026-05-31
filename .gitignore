@@ -16,6 +16,7 @@ vite.log
 proxy-output.txt
 
 # Editor directories and files
+.claude
 .vscode/*
 !.vscode/extensions.json
 .idea
