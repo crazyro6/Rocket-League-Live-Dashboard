@@ -37,7 +37,7 @@ function getTrackerUrl(player) {
   return `https://rocketleague.tracker.network/rocket-league/profile/${platform}/${encodeURIComponent(name)}`
 }
 
-const MatchDisplay = ({ match }) => {
+const MatchDisplay = ({ match, myPrimaryId }) => {
   if (!match) return <div className="match-card">No match data</div>
 
   const players = match.Players || []
@@ -52,6 +52,23 @@ const MatchDisplay = ({ match }) => {
 
   const blueScore = blueTeam?.Score ?? 0
   const orangeScore = orangeTeam?.Score ?? 0
+
+  // Boost is only sent for the local player's own team. Identify that team from
+  // "me" (stable across frames, so it survives a frame where my boost hit 0 and
+  // the feed dropped the field), falling back to whichever team currently
+  // reports any Boost when "me" isn't resolved yet.
+  const myTeamFromId = myPrimaryId
+    ? players.find(p => p?.PrimaryId === myPrimaryId)?.TeamNum
+    : undefined
+  const teamWithBoost = players.find(
+    p => typeof p?.Boost === 'number' && !Number.isNaN(p.Boost)
+  )?.TeamNum
+  const myBoostTeam =
+    myTeamFromId === 0 || myTeamFromId === 1
+      ? myTeamFromId
+      : teamWithBoost === 0 || teamWithBoost === 1
+        ? teamWithBoost
+        : null
 
   const renderPlayerStats = (player) => {
     const stats = [
@@ -76,9 +93,11 @@ const MatchDisplay = ({ match }) => {
 
   const renderBoostMeter = (player) => {
     // Boost is only sent for the local player's own team (it's a SPECTATOR
-    // field), so opponents have no Boost while you're playing. Hide the bar when
-    // there's no real value instead of showing a misleading "0".
-    if (typeof player?.Boost !== 'number' || Number.isNaN(player.Boost)) return null
+    // field), so opponents have no Boost while you're playing — hide their bar.
+    // For everyone on my team we keep the meter, coercing a missing/null value
+    // to 0 (getBoostValue) so a teammate at 0 boost shows "Boost 0" instead of
+    // vanishing when the feed omits the field.
+    if (myBoostTeam == null || player?.TeamNum !== myBoostTeam) return null
 
     const boost = getBoostValue(player.Boost)
 

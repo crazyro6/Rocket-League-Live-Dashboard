@@ -937,7 +937,7 @@ function App() {
         <>
           <div className="main-content">
             <div className="match-section">
-              <MatchDisplay match={matchData} />
+              <MatchDisplay match={matchData} myPrimaryId={myPrimaryId} />
               <div className="status-indicator connected">
                 <span>●</span> Live
               </div>
