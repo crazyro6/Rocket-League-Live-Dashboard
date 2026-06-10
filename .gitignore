@@ -26,7 +26,8 @@ proxy-output.txt
 *.njsproj
 *.sln
 *.sw?
-cacharreo api rlstats.code-workspace
+rocket-league-live-dashboard.code-workspace
 Rocket League Stats API.html
 roy_el_loco.json
-.claude
+/.claude
+CLAUDE.md
