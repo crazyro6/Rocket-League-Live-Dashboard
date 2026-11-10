@@ -1,6 +1,6 @@
+/* global process */
 import http from 'http'
 import net from 'net'
-import fetch from 'node-fetch'
 import { spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url'
 
 const API_HOST = '127.0.0.1'
 const API_PORT = 49123
-const PROXY_PORT = 3001
+const PROXY_PORT = Number(process.env.PORT) || 3001
 
 // Serve the production build (npm run build) so the whole app runs from this
 // single process on http://localhost:3001 — no Vite dev server needed.
@@ -72,8 +72,10 @@ const TRACKER_PLATFORM_MAP = {
   ps4: 'psn',
   ps5: 'psn',
   xbox: 'xbl',
+  xboxone: 'xbl',
   xbl: 'xbl',
   switch: 'switch',
+  nintendo: 'switch',
 }
 
 // Use system curl to defeat Cloudflare's JA3/TLS fingerprinting that blocks
@@ -110,16 +112,10 @@ function curlJson(url) {
 
 async function fetchTrackerProfile(platform, identifier) {
   const url = `${TRACKER_BASE}/${platform}/${encodeURIComponent(identifier)}`
-  console.log(`[TRACKER] GET ${url}`)
   const { status, body } = await curlJson(url)
 
-  if (status === 404) {
-    const err = new Error('Player not found on tracker.gg')
-    err.status = 404
-    throw err
-  }
   if (status < 200 || status >= 300) {
-    const err = new Error(`Upstream HTTP ${status}`)
+    const err = new Error(status === 404 ? 'Player not found on tracker.gg' : `Upstream HTTP ${status}`)
     err.status = status
     throw err
   }
@@ -127,19 +123,110 @@ async function fetchTrackerProfile(platform, identifier) {
   let json
   try {
     json = JSON.parse(body)
-  } catch (e) {
+  } catch {
     const err = new Error(`Non-JSON response from tracker.gg: ${body.slice(0, 100)}`)
     err.status = 502
     throw err
   }
   if (json?.errors?.length) {
-    const msg = json.errors[0]?.message || 'tracker.gg error'
-    const err = new Error(msg)
+    const err = new Error(json.errors[0]?.message || 'tracker.gg error')
     err.status = 502
     throw err
   }
   // Unwrap { data: {...} } envelope — the front expects the inner shape
   return json?.data ?? json
+}
+
+// --- tracker.gg access layer ---
+// tracker.gg answers 429 "Warden::Challenge" (captcha) when it sees bursts, so
+// every lookup goes through: disk cache -> one-at-a-time queue with spacing ->
+// global cooldown (exponential backoff) after a 429/403. While cooling down we
+// serve stale cache instead of hammering the API (which only extends the ban).
+const CACHE_FILE = path.join(__dirname, 'tracker-cache.json')
+const CACHE_TTL = 15 * 60 * 1000   // normal lookups
+const FRESH_TTL = 45 * 1000        // ?fresh=1 (post-match MMR polling)
+const NOTFOUND_TTL = 10 * 60 * 1000
+const SPACING_MS = 1500            // gap between upstream calls
+const COOLDOWN_BASE = 60 * 1000
+const COOLDOWN_MAX = 10 * 60 * 1000
+
+const cache = new Map()
+try {
+  for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')))) cache.set(k, v)
+} catch { /* no cache yet */ }
+
+let saveTimer = null
+function saveCache() {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    fs.writeFile(CACHE_FILE, JSON.stringify(Object.fromEntries(cache)), () => {})
+  }, 2000)
+}
+
+let cooldownUntil = 0
+let cooldownStep = 0
+let queue = Promise.resolve()
+const inflight = new Map()
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function limitedError() {
+  const err = new Error('tracker.gg is rate-limiting this PC')
+  err.status = 429
+  err.retryAfter = Math.max(1, Math.ceil((cooldownUntil - Date.now()) / 1000))
+  return err
+}
+
+// -> { data, cache: 'hit' | 'stale' | 'miss' }. Rejects with .status (+ .retryAfter).
+function getTracker(platform, identifier, fresh) {
+  const key = `${platform}/${identifier.toLowerCase()}`
+  const hit = cache.get(key)
+  const age = hit ? Date.now() - hit.at : Infinity
+  const ttl = hit?.data === null ? NOTFOUND_TTL : fresh ? FRESH_TTL : CACHE_TTL
+  if (hit && age < ttl) {
+    if (hit.data === null) {
+      return Promise.reject(Object.assign(new Error('Player not found on tracker.gg'), { status: 404 }))
+    }
+    return Promise.resolve({ data: hit.data, cache: 'hit' })
+  }
+  const stale = () => (hit && hit.data !== null ? { data: hit.data, cache: 'stale' } : null)
+  if (Date.now() < cooldownUntil) {
+    return stale() ? Promise.resolve(stale()) : Promise.reject(limitedError())
+  }
+  if (inflight.has(key)) return inflight.get(key)
+
+  const job = queue.then(async () => {
+    if (Date.now() < cooldownUntil) {
+      const s = stale()
+      if (s) return s
+      throw limitedError()
+    }
+    try {
+      const data = await fetchTrackerProfile(platform, identifier)
+      cooldownStep = 0
+      cache.set(key, { at: Date.now(), data })
+      saveCache()
+      return { data, cache: 'miss' }
+    } catch (err) {
+      if (err.status === 404) {
+        cache.set(key, { at: Date.now(), data: null })
+        saveCache()
+      } else if (err.status === 429 || err.status === 403) {
+        cooldownStep++
+        cooldownUntil = Date.now() + Math.min(COOLDOWN_BASE * 2 ** (cooldownStep - 1), COOLDOWN_MAX)
+        console.warn(`[TRACKER] rate-limited (${err.status}) — cooling down ${Math.round((cooldownUntil - Date.now()) / 1000)}s`)
+        const s = stale()
+        if (s) return s
+        throw limitedError()
+      }
+      throw err
+    } finally {
+      await sleep(SPACING_MS)
+    }
+  })
+  queue = job.catch(() => {})
+  inflight.set(key, job)
+  job.then(() => inflight.delete(key), () => inflight.delete(key))
+  return job
 }
 
 const server = http.createServer((req, res) => {
@@ -230,38 +317,30 @@ const server = http.createServer((req, res) => {
     // /tracker/<platform>/<identifier>
     // Proxies tracker.gg's internal API. For Steam, <identifier> must be the
     // SteamID64; for epic/psn/xbox, the display name works.
-    const parts = req.url.split('/').filter(Boolean) // ['tracker', plat, ident]
+    const [pathPart, query = ''] = req.url.split('?')
+    const parts = pathPart.split('/').filter(Boolean) // ['tracker', plat, ident]
     const rawPlatform = (parts[1] || '').toLowerCase()
-    const identifier = parts[2] ? decodeURIComponent(parts[2]) : ''
+    let identifier = ''
+    try { identifier = parts[2] ? decodeURIComponent(parts[2]) : '' } catch { /* malformed % in a name */ }
     const platform = TRACKER_PLATFORM_MAP[rawPlatform]
-
-    console.log(`[TRACKER] Incoming: rawPlatform=${rawPlatform} → ${platform}, identifier=${identifier}`)
+    const fresh = new URLSearchParams(query).get('fresh') === '1'
+    const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }
 
     if (!platform || !identifier) {
-      res.writeHead(400, {
-        'Access-Control-Allow-Origin': '*',
-        'Content-Type': 'application/json',
-      })
+      res.writeHead(400, headers)
       res.end(JSON.stringify({ error: `Invalid platform or identifier (got ${rawPlatform}/${identifier})` }))
       return
     }
 
-    fetchTrackerProfile(platform, identifier)
-      .then((data) => {
-        res.writeHead(200, {
-          'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json',
-        })
+    getTracker(platform, identifier, fresh)
+      .then(({ data, cache: c }) => {
+        res.writeHead(200, { ...headers, 'X-Tracker-Cache': c })
         res.end(JSON.stringify(data))
       })
       .catch((err) => {
-        console.error(`[TRACKER] Error: ${err.message}`)
-        const status = err.status || 500
-        res.writeHead(status, {
-          'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json',
-        })
-        res.end(JSON.stringify({ error: err.message }))
+        console.error(`[TRACKER] ${platform}/${identifier}: ${err.message}`)
+        res.writeHead(err.status || 500, headers)
+        res.end(JSON.stringify({ error: err.message, retryAfter: err.retryAfter }))
       })
   } else {
     // Everything else → the built front-end (dist/), with SPA fallback.

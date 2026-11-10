@@ -17,7 +17,7 @@ export default function Sparkline({ values = [], height = 40 }) {
   })
 
   const net = values[values.length - 1] - values[0]
-  const color = net > 0 ? '#22c55e' : net < 0 ? '#ef4444' : '#aa3bff'
+  const color = net > 0 ? '#34d399' : net < 0 ? '#f87171' : '#2dd4bf'
   const [lastX, lastY] = points[points.length - 1].split(',')
 
   return (

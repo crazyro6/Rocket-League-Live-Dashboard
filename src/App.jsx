@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
-import MatchDisplay from './components/MatchDisplay'
-import TrackerPanel from './components/TrackerPanel'
+import Scoreboard from './components/Scoreboard'
+import PlayerCard from './components/PlayerCard'
 import Sparkline from './components/Sparkline'
+import DemoPanel from './components/DemoPanel'
+import { DEMO, createDemoStream, demoProfile } from './demo'
 
 const PLAYLISTS = [
   { id: 10, label: '1v1' },
@@ -72,7 +74,13 @@ const STATFEED_FEED = {
   mvp: { icon: '🏆', text: (m) => `MVP — ${m.Name}` },
 }
 
+// A match's MMR change is "pending" for a while after it ends; after that we
+// give up (casual game, or tracker.gg never showed a change) and show "—".
+const MMR_PENDING_MS = 10 * 60 * 1000
+const isMmrPending = (m, now = Date.now()) => m.mmrDelta == null && m.playlistId != null && now - (m.endedAt || 0) < MMR_PENDING_MS
+
 function loadSession() {
+  if (DEMO) return null // demo always starts clean and never touches the real session
   try {
     const raw = localStorage.getItem(SESSION_KEY)
     if (!raw) return null
@@ -98,7 +106,18 @@ function App() {
     bootSession?.startedAt ? new Date(bootSession.startedAt) : new Date()
   )
   const [trackerProfiles, setTrackerProfiles] = useState({})
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState(11)
+  // Coarse clock so "pending MMR" expiry and the rate-limit notice refresh.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15000)
+    return () => clearInterval(t)
+  }, [])
+  // Timestamp until which tracker.gg is rate-limiting us (0 = fine).
+  const [trackerLimitedUntil, setTrackerLimitedUntil] = useState(0)
+  // Playlist shown in the rank cards: the one auto-detected from the player
+  // count, unless the user picked another tab for this match.
+  const [detectedPlaylistId, setDetectedPlaylistId] = useState(null)
+  const [playlistPick, setPlaylistPick] = useState(null)
   // Per-playlist session MMR tracking for the main (tracked) user.
   // mmrSession: { [playlistId]: { start, current } }
   const [mmrSession, setMmrSession] = useState(() => bootSession?.mmrSession || {})
@@ -111,7 +130,6 @@ function App() {
   // Live match event feed (goals, saves, demos…). Ephemeral, not persisted.
   const [eventFeed, setEventFeed] = useState([])
   // Whether the live feed is expanded (user can collapse it).
-  const [feedCollapsed, setFeedCollapsed] = useState(false)
   // Live MMR baseline per playlist, shared with the stream loop so deltas keep
   // computing correctly after a refresh (seeded from the restored session).
   const [initialMmrTrack] = useState(() => {
@@ -130,6 +148,7 @@ function App() {
   // myPrimaryId is the resolved identity (auto-detected or manually set).
   // manualMeRef holds an explicit user override (persisted), read by the stream loop.
   const readSavedMe = () => {
+    if (DEMO) return ''
     try {
       return localStorage.getItem('rl-me-primary-id') || ''
     } catch {
@@ -144,6 +163,7 @@ function App() {
     if (!primaryId) return
     manualMeRef.current = primaryId
     setMyPrimaryId(primaryId)
+    if (DEMO) return
     try {
       localStorage.setItem('rl-me-primary-id', primaryId)
     } catch {
@@ -153,6 +173,7 @@ function App() {
 
   // Persist the session on every change so a refresh restores it.
   useEffect(() => {
+    if (DEMO) return
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify({
         savedAt: Date.now(),
@@ -297,38 +318,23 @@ function App() {
       return null
     }
 
-    const fetchTrackerProfile = async (playerName, platform) => {
+    // -> { profile } on success, else { status, retryAfter? }. The proxy owns
+    // caching/queueing/backoff; a 429 means tracker.gg is rate-limiting us.
+    const fetchTrackerProfile = async (playerName, platform, fresh = false) => {
+      if (DEMO) return { profile: demoProfile(playerName) }
       try {
-        console.log(`Fetching Tracker: ${platform}/${playerName}`)
-        const response = await fetch(`/tracker/${platform}/${playerName}`)
-        const text = await response.text()
-
-        console.log('Tracker response status:', response.status)
-        console.log('Tracker response text:', text.substring(0, 500))
-
-        if (!response.ok) {
-          console.warn(`Tracker API error ${response.status}:`, text)
-          return null
+        const res = await fetch(`/tracker/${platform}/${encodeURIComponent(playerName)}${fresh ? '?fresh=1' : ''}`)
+        if (res.ok) {
+          if (isMounted) setTrackerLimitedUntil(0)
+          return { profile: await res.json() }
         }
-
-        let result
-        try {
-          result = JSON.parse(text)
-        } catch (e) {
-          console.error('Failed to parse JSON:', e.message, 'Raw:', text.substring(0, 200))
-          return null
+        const body = await res.json().catch(() => ({}))
+        if (res.status === 429 && isMounted) {
+          setTrackerLimitedUntil(Date.now() + (body.retryAfter || 60) * 1000)
         }
-
-        if (result.errors) {
-          console.warn('Tracker errors:', result.errors)
-          return null
-        }
-
-        // Response might be { data: {...} } or just {...}
-        return result.data || result
-      } catch (err) {
-        console.error('Tracker fetch error:', err.message)
-        return null
+        return { status: res.status, retryAfter: body.retryAfter }
+      } catch {
+        return { status: 0 }
       }
     }
 
@@ -342,10 +348,16 @@ function App() {
         ps4: 'psn',
         ps5: 'psn',
         xbox: 'xbox',
+        xboxone: 'xbox',
         xbl: 'xbox',
+        switch: 'switch',
+        nintendo: 'switch',
       }
       return PLATFORM_MAP[platformRaw] || platformRaw
     }
+
+    // Bots have no real account ("Unknown|0|0"): tracker.gg can't know them.
+    const isBotId = (pid) => /^unknown\|/i.test(pid) || pid.split('|')[1] === '0'
 
     // rocket-league.com URL needs SteamID64 for steam, display name otherwise
     const getTrackerIdentifier = (player, platform) => {
@@ -384,13 +396,16 @@ function App() {
 
     // Assign an MMR change to the oldest still-pending match of that playlist
     // (matches resolve in the order they were played).
+    // History is newest-first and MMR lands ~1 min after a match, so the newest
+    // still-pending match of that playlist is the right one; older unresolved
+    // ones (casual games, which never change MMR) have expired (see isMmrPending).
     const attributeMmrDelta = (playlistId, delta) => {
       if (!isMounted || delta === 0) return
       setSessionHistory((prev) => {
         let idx = -1
-        for (let i = prev.length - 1; i >= 0; i--) {
+        for (let i = 0; i < prev.length; i++) {
           const m = prev[i]
-          if (m.playlistId === playlistId && m.mmrDelta == null && (m.result === 'W' || m.result === 'L')) {
+          if (m.playlistId === playlistId && isMmrPending(m) && (m.result === 'W' || m.result === 'L')) {
             idx = i
             break
           }
@@ -489,7 +504,7 @@ function App() {
         return
       }
       if (!mainUserIdentifier || !mainUserPlatform || activePlaylistId == null) return
-      const profile = await fetchTrackerProfile(mainUserIdentifier, mainUserPlatform)
+      const { profile } = await fetchTrackerProfile(mainUserIdentifier, mainUserPlatform, true)
       if (!isMounted || !profile) return
       if (trackedPlayerPrimaryId) {
         setTrackerProfiles((prev) => ({ ...prev, [trackedPlayerPrimaryId]: profile }))
@@ -499,7 +514,7 @@ function App() {
 
     const bumpMmrPolling = (windowMs) => {
       pollDeadline = Math.max(pollDeadline, Date.now() + windowMs)
-      if (!pollTimer) pollTimer = setInterval(runMmrPoll, 30000)
+      if (!pollTimer) pollTimer = setInterval(runMmrPoll, DEMO ? 5000 : 45000)
     }
 
     const connectToAPI = async () => {
@@ -509,9 +524,9 @@ function App() {
         addDebugInfo(`Connecting to ${apiUrl}`)
         setConnectionStatus('connecting')
         
-        const response = await fetch(apiUrl, {
-          signal: abortController.signal
-        })
+        const response = DEMO
+          ? { ok: true, status: 200, headers: new Headers(), body: createDemoStream(abortController.signal) }
+          : await fetch(apiUrl, { signal: abortController.signal })
 
         console.log('Response received:', response)
         console.log('Response status:', response.status)
@@ -541,10 +556,9 @@ function App() {
         let peakKnownOrangeScore = 0
         let hadOpposingTeams = false
         let lastKnownWinnerTeamNum = null
-        const trackerFetchedSet = new Set()   // pid → fetched successfully this match
+        const trackerFetchedSet = new Set()   // pid → resolved this match (profile or 404)
         const trackerInflight = new Set()     // pid → fetch currently in flight
-        const trackerAttempts = new Map()     // pid → attempts so far this match
-        const MAX_TRACKER_ATTEMPTS = 3
+        const trackerNextTry = new Map()      // pid → earliest time to retry after a failure
 
         while (true) {
           const { done, value } = await reader.read()
@@ -599,9 +613,12 @@ function App() {
                 lastKnownWinnerTeamNum = null
                 trackerFetchedSet.clear()
                 trackerInflight.clear()
-                trackerAttempts.clear()
+                trackerNextTry.clear()
                 maxPlayerCountThisMatch = 0
-                if (isMounted) setEventFeed([])
+                if (isMounted) {
+                  setEventFeed([])
+                  setPlaylistPick(null)
+                }
               }
 
               if (message.Event === 'RoundStarted') {
@@ -692,6 +709,7 @@ function App() {
                           result,
                           playlistId: activePlaylistId,
                           mmrDelta: null,
+                          endedAt: Date.now(),
                         },
                         ...prev,
                       ].slice(0, 25))
@@ -734,6 +752,7 @@ function App() {
                           result,
                           playlistId: activePlaylistId,
                           mmrDelta: null,
+                          endedAt: Date.now(),
                         },
                         ...prev,
                       ].slice(0, 25))
@@ -788,44 +807,44 @@ function App() {
                   const detectedPlaylist = detectPlaylistId(maxPlayerCountThisMatch)
                   if (detectedPlaylist != null) {
                     activePlaylistId = detectedPlaylist
+                    setDetectedPlaylistId(detectedPlaylist)
                   }
 
-                  // Fetch tracker.gg profile for every player. Only mark a PID
-                  // as "done" after a successful response; otherwise we retry on
-                  // the next UpdateState (up to MAX_TRACKER_ATTEMPTS). This avoids
-                  // permanently losing a player whose first UpdateState arrived
-                  // with incomplete fields or whose tracker.gg lookup briefly 404'd.
-                  for (const player of statePlayers) {
+                  // Fetch tracker.gg profile for every real player, me first.
+                  // A PID is "done" on success or a definitive 404. Any other
+                  // failure (tracker.gg rate limit, network) retries after a
+                  // delay — NOT on the next UpdateState, which arrives many times
+                  // a second and used to burn every retry in under a second.
+                  const queueOrder = [...statePlayers].sort(
+                    (a, b) => (b?.PrimaryId === trackedPlayerPrimaryId) - (a?.PrimaryId === trackedPlayerPrimaryId)
+                  )
+                  for (const player of queueOrder) {
                     const pid = player?.PrimaryId
-                    if (!pid) continue
-                    if (trackerFetchedSet.has(pid)) continue
-                    if (trackerInflight.has(pid)) continue
-                    if ((trackerAttempts.get(pid) || 0) >= MAX_TRACKER_ATTEMPTS) continue
+                    if (!pid || isBotId(pid)) continue
+                    if (trackerFetchedSet.has(pid) || trackerInflight.has(pid)) continue
+                    if (Date.now() < (trackerNextTry.get(pid) || 0)) continue
 
                     const platform = getPlatformFromPrimaryId(pid)
                     const identifier = getTrackerIdentifier(player, platform)
-                    // Skip without consuming an attempt — wait for a later
-                    // UpdateState where the fields are populated.
+                    // Fields not populated yet — a later UpdateState will have them.
                     if (!platform || !identifier) continue
 
                     trackerInflight.add(pid)
-                    const attemptNum = (trackerAttempts.get(pid) || 0) + 1
-                    trackerAttempts.set(pid, attemptNum)
-
-                    fetchTrackerProfile(identifier, platform).then((profileData) => {
+                    fetchTrackerProfile(identifier, platform).then(({ profile, status, retryAfter }) => {
                       trackerInflight.delete(pid)
                       if (!isMounted) return
-                      if (profileData) {
+                      if (profile) {
                         trackerFetchedSet.add(pid)
-                        setTrackerProfiles((prev) => ({ ...prev, [pid]: profileData }))
+                        setTrackerProfiles((prev) => ({ ...prev, [pid]: profile }))
                         // Capture the main user's MMR (session start / live value)
-                        if (pid === trackedPlayerPrimaryId) readMainUserMmr(profileData)
-                      } else if (attemptNum >= MAX_TRACKER_ATTEMPTS) {
-                        // Give up — surface the failure in the UI
-                        addDebugInfo(`Tracker failed after ${MAX_TRACKER_ATTEMPTS} attempts: ${identifier} (${platform})`)
-                        setTrackerProfiles((prev) => ({ ...prev, [pid]: null }))
+                        if (pid === trackedPlayerPrimaryId) readMainUserMmr(profile)
+                      } else if (status === 404) {
+                        trackerFetchedSet.add(pid)
+                        // Never replace a good profile from an earlier match with "not found".
+                        setTrackerProfiles((prev) => (prev[pid] ? prev : { ...prev, [pid]: null }))
                       } else {
-                        addDebugInfo(`Tracker miss (attempt ${attemptNum}/${MAX_TRACKER_ATTEMPTS}): ${identifier} (${platform}) — will retry`)
+                        trackerNextTry.set(pid, Date.now() + (retryAfter ? (retryAfter + 2) * 1000 : 20000))
+                        addDebugInfo(`Tracker ${status || 'offline'}: ${identifier} (${platform}) — retrying later`)
                       }
                     })
                   }
@@ -880,31 +899,25 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+
   const wins = sessionHistory.filter((m) => m.result === 'W').length
   const losses = sessionHistory.filter((m) => m.result === 'L').length
 
   const activeMmr = mmrActivePlaylist != null ? mmrSession[mmrActivePlaylist] : null
   const mmrTotal = activeMmr ? activeMmr.current - activeMmr.start : 0
-  const activeMmrLabel = PLAYLISTS.find((p) => p.id === mmrActivePlaylist)?.label || ''
+  const sessionPlaylistLabel = PLAYLISTS.find((p) => p.id === mmrActivePlaylist)?.label || ''
   const fmtDelta = (n) => `${n > 0 ? '+' : ''}${n}`
+  const sign = (n) => (n > 0 ? 'pos' : n < 0 ? 'neg' : '')
 
   let streakType = null
   let streakCount = 0
   for (const match of sessionHistory) {
     if (match.result !== 'W' && match.result !== 'L') break
-    if (!streakType) {
-      streakType = match.result
-      streakCount = 1
-      continue
-    }
-    if (match.result === streakType) {
-      streakCount++
-      continue
-    }
-    break
+    if (!streakType) streakType = match.result
+    if (match.result !== streakType) break
+    streakCount++
   }
 
-  // Derived session figures
   const totalGames = sessionHistory.length
   const decided = wins + losses
   const winRate = decided > 0 ? Math.round((wins / decided) * 100) : 0
@@ -927,189 +940,182 @@ function App() {
   const mmrPeak = activeSeries.length ? Math.max(...activeSeries) : null
   const mmrFloor = activeSeries.length ? Math.min(...activeSeries) : null
 
+  const selectedPlaylistId = playlistPick ?? detectedPlaylistId ?? mmrActivePlaylist ?? 11
+  const limited = trackerLimitedUntil > now
+  const limitedMins = Math.max(1, Math.ceil((trackerLimitedUntil - now) / 60000))
+
+  const players = matchData?.Players || []
+  const myTeam = players.find((p) => p?.PrimaryId === myPrimaryId)?.TeamNum
+  // Boost is a spectator-only field: only your own team has it (see CLAUDE.md).
+  const boostTeam = myTeam === 0 || myTeam === 1 ? myTeam : players.find((p) => typeof p?.Boost === 'number')?.TeamNum
+
+  const renderTeam = (teamNum) => (
+    <div className={`team ${teamNum === 0 ? 'blue' : 'orange'}`}>
+      {players
+        .filter((p) => p?.TeamNum === teamNum)
+        .map((p) => (
+          <PlayerCard
+            key={p.PrimaryId || p.Name}
+            player={p}
+            profile={trackerProfiles[p.PrimaryId]}
+            playlistId={selectedPlaylistId}
+            isMe={!!p.PrimaryId && p.PrimaryId === myPrimaryId}
+            onSelectMe={handleSelectMe}
+            showBoost={boostTeam != null && p.TeamNum === boostTeam}
+            limited={limited}
+            isBot={!p.PrimaryId || /^unknown\|/i.test(p.PrimaryId) || p.PrimaryId.split('|')[1] === '0'}
+          />
+        ))}
+    </div>
+  )
+
+  const connLabel = connectionStatus === 'connected' ? (matchData ? 'Live' : 'Connected') : connectionStatus === 'connecting' ? 'Connecting' : 'Offline'
+
   return (
-    <div className="app-container">
-      <h1>Rocket League Stats</h1>
-      
-      {error && <div className="error">{error}</div>}
-      
+    <div className="app">
+      {DEMO && <DemoPanel />}
+      <header className="topbar">
+        <h1 className="brand">Rocket League <b>Pulse</b></h1>
+        {matchData && (
+          <div className="tabs" role="group" aria-label="Rank playlist">
+            {PLAYLISTS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                aria-pressed={selectedPlaylistId === p.id}
+                className={selectedPlaylistId === p.id ? 'tab active' : 'tab'}
+                onClick={() => setPlaylistPick(p.id === detectedPlaylistId ? null : p.id)}
+                title={p.id === detectedPlaylistId ? 'Detected from this match' : ''}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className={`conn ${connectionStatus}`}><i />{connLabel}</div>
+      </header>
+
+      {error && <div className="notice error" role="alert">{error}</div>}
+      {limited && (
+        <div className="notice warn" role="status">
+          tracker.gg is rate-limiting this PC, so ranks may be missing or stale. Retrying automatically (about {limitedMins} min).
+        </div>
+      )}
+
       {matchData ? (
-        <>
-          <div className="main-content">
-            <div className="match-section">
-              <MatchDisplay match={matchData} myPrimaryId={myPrimaryId} />
-              <div className="status-indicator connected">
-                <span>●</span> Live
-              </div>
-              {eventFeed.length > 0 && (
-                <div className="event-feed">
-                  <button
-                    type="button"
-                    className="event-feed-head"
-                    onClick={() => setFeedCollapsed((c) => !c)}
-                    aria-expanded={!feedCollapsed}
-                    title={feedCollapsed ? 'Show match feed' : 'Hide match feed'}
-                  >
-                    <span className="feed-toggle-caret">{feedCollapsed ? '▸' : '▾'}</span>
-                    Match feed
-                    <span className="feed-count">{eventFeed.length}</span>
-                  </button>
-                  {!feedCollapsed && (
-                    <div className="event-feed-list">
-                      {eventFeed.map((e) => (
-                        <div
-                          key={e.id}
-                          className={`feed-item ${e.teamNum === 0 ? 'team-blue' : e.teamNum === 1 ? 'team-orange' : ''} ${e.mine ? 'mine' : ''}`}
-                        >
-                          <span className="feed-icon">{e.icon}</span>
-                          <span className="feed-text">{e.text}</span>
-                          {e.detail && <span className="feed-detail">{e.detail}</span>}
-                        </div>
-                      ))}
+        <main className="layout">
+          <section className="live">
+            <Scoreboard game={matchData.Game} playlistLabel={PLAYLISTS.find((p) => p.id === detectedPlaylistId)?.label} />
+            <div className="teams">
+              {renderTeam(0)}
+              {renderTeam(1)}
+            </div>
+            {eventFeed.length > 0 && (
+              <details className="feed" open>
+                <summary>Match feed <span>{eventFeed.length}</span></summary>
+                <div className="feed-list">
+                  {eventFeed.map((e) => (
+                    <div key={e.id} className={`feed-item ${e.teamNum === 0 ? 'blue' : e.teamNum === 1 ? 'orange' : ''} ${e.mine ? 'mine' : ''}`}>
+                      <span>{e.icon}</span>
+                      <span className="feed-text">{e.text}</span>
+                      {e.detail && <span className="feed-detail">{e.detail}</span>}
                     </div>
-                  )}
+                  ))}
                 </div>
+              </details>
+            )}
+          </section>
+
+          <aside className="session">
+            <div className="session-head">
+              <h2>Session</h2>
+              <span className="muted">since {sessionStartedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              {totalGames > 0 && (
+                <button type="button" className="btn" onClick={() => { if (window.confirm("Start a new session? This clears the history and MMR progress.")) resetSession() }}>
+                  New
+                </button>
               )}
             </div>
-            <div className="tracker-section">
-              <div className="trackers-toolbar" role="tablist">
-                {PLAYLISTS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={selectedPlaylistId === p.id}
-                    className={`rank-tab ${selectedPlaylistId === p.id ? 'active' : ''}`}
-                    onClick={() => setSelectedPlaylistId(p.id)}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              <div className="trackers-grid">
-                <div className="trackers-col">
-                  {(matchData.Players || [])
-                    .filter((p) => p?.TeamNum === 0)
-                    .map((p) => (
-                      <TrackerPanel
-                        key={p.PrimaryId || p.Name}
-                        player={p}
-                        trackerProfile={trackerProfiles[p.PrimaryId]}
-                        selectedPlaylistId={selectedPlaylistId}
-                        isMe={!!p.PrimaryId && p.PrimaryId === myPrimaryId}
-                        onSelectMe={handleSelectMe}
-                      />
-                    ))}
-                </div>
-                <div className="trackers-col">
-                  {(matchData.Players || [])
-                    .filter((p) => p?.TeamNum === 1)
-                    .map((p) => (
-                      <TrackerPanel
-                        key={p.PrimaryId || p.Name}
-                        player={p}
-                        trackerProfile={trackerProfiles[p.PrimaryId]}
-                        selectedPlaylistId={selectedPlaylistId}
-                        isMe={!!p.PrimaryId && p.PrimaryId === myPrimaryId}
-                        onSelectMe={handleSelectMe}
-                      />
-                    ))}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="session-card">
-            <div className="session-header">
-              <h2>Session History</h2>
-              <div className="session-header-right">
-                <span className="session-started">
-                  Started at {sessionStartedAt.toLocaleTimeString()}
-                </span>
-                {sessionHistory.length > 0 && (
-                  <button
-                    type="button"
-                    className="session-reset"
-                    onClick={resetSession}
-                    title="Clear history and start a new session"
-                  >
-                    New session
-                  </button>
+
+            <div className="hero-stats">
+              <div className="hero">
+                <span className="hero-label">MMR {sessionPlaylistLabel}</span>
+                {activeMmr ? (
+                  <>
+                    <span className="hero-value">{activeMmr.current}</span>
+                    <span className={`hero-sub ${sign(mmrTotal)}`}>{fmtDelta(mmrTotal)} <em>from {activeMmr.start}</em></span>
+                  </>
+                ) : (
+                  <span className="hero-value dim">—</span>
                 )}
               </div>
-            </div>
-            <div className="session-summary">
-              <span>Wins: {wins}</span>
-              <span>Losses: {losses}</span>
-              <span>Matches: {sessionHistory.length}</span>
-              {streakCount > 0 && (
-                <span className={streakType === 'W' ? 'streak-win' : 'streak-loss'}>
-                  Streak: {streakCount} {streakType === 'W' ? '🔥' : '🧊'}
+              <div className="hero">
+                <span className="hero-label">Record</span>
+                <span className="hero-value"><span className="pos">{wins}</span><span className="dim">–</span><span className="neg">{losses}</span></span>
+                <span className="hero-sub">
+                  {decided > 0 ? `${winRate}%` : ''}
+                  {streakCount > 1 && <em className={streakType === 'W' ? 'pos' : 'neg'}> {streakCount}{streakType} streak</em>}
                 </span>
-              )}
-              {activeMmr && (
-                <span className="session-mmr">
-                  MMR{activeMmrLabel ? ` ${activeMmrLabel}` : ''}: {activeMmr.start} → {activeMmr.current}{' '}
-                  <span className={mmrTotal > 0 ? 'mmr-pos' : mmrTotal < 0 ? 'mmr-neg' : ''}>
-                    ({fmtDelta(mmrTotal)})
-                  </span>
-                </span>
-              )}
-            </div>
-
-            {totalGames > 0 && (
-              <div className="session-stats">
-                <div className="sstat"><span className="sstat-label">Win rate</span><span className="sstat-value">{winRate}%</span></div>
-                <div className="sstat"><span className="sstat-label">Goals</span><span className="sstat-value">{sessionStats.goals} <em>{perGame(sessionStats.goals)}/g</em></span></div>
-                <div className="sstat"><span className="sstat-label">Assists</span><span className="sstat-value">{sessionStats.assists} <em>{perGame(sessionStats.assists)}/g</em></span></div>
-                <div className="sstat"><span className="sstat-label">Saves</span><span className="sstat-value">{sessionStats.saves} <em>{perGame(sessionStats.saves)}/g</em></span></div>
-                <div className="sstat"><span className="sstat-label">Shooting</span><span className="sstat-value">{shootingPct}%</span></div>
-                <div className="sstat"><span className="sstat-label">Demos</span><span className="sstat-value">{sessionStats.demos}</span></div>
-                <div className="sstat"><span className="sstat-label">MVPs</span><span className="sstat-value">{sessionStats.mvps}</span></div>
-                <div className="sstat"><span className="sstat-label">Best streak</span><span className="sstat-value">{bestWinStreak}W</span></div>
               </div>
-            )}
+            </div>
 
             {activeSeries.length >= 2 && (
-              <div className="mmr-graph">
-                <div className="mmr-graph-head">
-                  <span>MMR{activeMmrLabel ? ` ${activeMmrLabel}` : ''} this session</span>
-                  <span className="mmr-graph-range">{mmrFloor} – {mmrPeak}</span>
-                </div>
+              <div className="graph">
+                <div className="graph-head"><span>MMR this session</span><span>{mmrFloor} – {mmrPeak}</span></div>
                 <Sparkline values={activeSeries} />
               </div>
             )}
 
-            <div className="session-list">
-              {sessionHistory.length > 0 ? (
-                sessionHistory.map((match) => (
-                  <div key={match.id} className="session-item">
-                    <span>{match.time}</span>
-                    <span>{match.blueScore} - {match.orangeScore}</span>
-                    <span>{match.result === 'W' ? 'Win' : match.result === 'L' ? 'Loss' : 'Unknown'}</span>
-                    <span className={`mmr-delta ${match.mmrDelta > 0 ? 'mmr-pos' : match.mmrDelta < 0 ? 'mmr-neg' : ''}`}>
-                      {match.mmrDelta != null
-                        ? fmtDelta(match.mmrDelta)
-                        : match.playlistId != null ? '…' : ''}
-                    </span>
+            {totalGames > 0 && (
+              <div className="sstats">
+                {[
+                  ['Goals', sessionStats.goals, `${perGame(sessionStats.goals)}/g`],
+                  ['Assists', sessionStats.assists, `${perGame(sessionStats.assists)}/g`],
+                  ['Saves', sessionStats.saves, `${perGame(sessionStats.saves)}/g`],
+                  ['Shooting', `${shootingPct}%`],
+                  ['Demos', sessionStats.demos],
+                  ['MVPs', sessionStats.mvps],
+                  ['Best streak', `${bestWinStreak}W`],
+                ].map(([label, value, sub]) => (
+                  <div key={label} className="sstat">
+                    <span>{label}</span>
+                    <b>{value}{sub && <em>{sub}</em>}</b>
                   </div>
+                ))}
+              </div>
+            )}
+
+            <ul className="history">
+              {totalGames > 0 ? (
+                sessionHistory.map((m) => (
+                  <li key={m.id}>
+                    <span className={`pill ${m.result === 'W' ? 'win' : m.result === 'L' ? 'loss' : ''}`}>{m.result || '?'}</span>
+                    <span className="h-score">{m.blueScore}–{m.orangeScore}</span>
+                    <span className="muted">{PLAYLISTS.find((p) => p.id === m.playlistId)?.label}</span>
+                    <span className="muted h-time">{m.time}</span>
+                    <b className={`h-delta ${sign(m.mmrDelta)}`}>
+                      {m.mmrDelta != null ? fmtDelta(m.mmrDelta) : isMmrPending(m, now) ? '…' : '—'}
+                    </b>
+                  </li>
                 ))
               ) : (
-                <div className="session-empty">No completed matches yet in this session.</div>
+                <li className="empty">No completed matches yet.</li>
               )}
-            </div>
-          </div>
-        </>
+            </ul>
+          </aside>
+        </main>
       ) : (
-        <div className="waiting-state">
-          <div className={`status-indicator ${connectionStatus}`}>
-            <span>●</span> {connectionStatus === 'connecting' ? 'Connecting...' : connectionStatus === 'connected' ? 'Connected, waiting for match...' : 'Connection failed'}
-          </div>
-          <div className="debug-info">
+        <main className="waiting">
+          <div className="waiting-title">{connectionStatus === 'connected' ? 'Waiting for a match…' : connectionStatus === 'connecting' ? 'Connecting to the game…' : 'Cannot reach the game'}</div>
+          <p className="muted">Open Rocket League with the Stats API enabled. The dashboard appears as soon as a match starts.</p>
+          {!DEMO && <a className="btn demo-link" href="?demo">Try demo mode</a>}
+          <details className="debug">
+            <summary>Connection log</summary>
             {debugInfo.map((info, idx) => (
-              <div key={idx} className="debug-line">{info}</div>
+              <div key={idx}>{info}</div>
             ))}
-          </div>
-        </div>
+          </details>
+        </main>
       )}
     </div>
   )
