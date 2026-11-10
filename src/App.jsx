@@ -5,6 +5,7 @@ import PlayerCard from './components/PlayerCard'
 import Sparkline from './components/Sparkline'
 import DemoPanel from './components/DemoPanel'
 import { DEMO, createDemoStream, demoProfile } from './demo'
+import { t, getLang, setLang, useLang } from './i18n'
 
 const PLAYLISTS = [
   { id: 10, label: '1v1' },
@@ -65,13 +66,13 @@ const SESSION_MAX_IDLE_MS = 6 * 60 * 60 * 1000 // 6h gap → treat as a new sess
 // StatfeedEvent names we surface in the live feed (keyed lowercase). Goals are
 // handled via the richer GoalScored event; assists/shots/etc. are too noisy.
 const STATFEED_FEED = {
-  demolish: { icon: '💥', text: (m, s) => `${m.Name} demolished ${s?.Name || '?'}` },
-  save: { icon: '🧤', text: (m) => `Save by ${m.Name}` },
-  epicsave: { icon: '🔥', text: (m) => `Epic save by ${m.Name}` },
-  savior: { icon: '🦸', text: (m) => `${m.Name} saved the day` },
-  playmaker: { icon: '🎯', text: (m) => `Playmaker — ${m.Name}` },
-  hattrick: { icon: '🎩', text: (m) => `Hat trick — ${m.Name}!` },
-  mvp: { icon: '🏆', text: (m) => `MVP — ${m.Name}` },
+  demolish: { icon: '💥', key: 'feed.demolish' },
+  save: { icon: '🧤', key: 'feed.save' },
+  epicsave: { icon: '🔥', key: 'feed.epicsave' },
+  savior: { icon: '🦸', key: 'feed.savior' },
+  playmaker: { icon: '🎯', key: 'feed.playmaker' },
+  hattrick: { icon: '🎩', key: 'feed.hattrick' },
+  mvp: { icon: '🏆', key: 'feed.mvp' },
 }
 
 // A match's MMR change is "pending" for a while after it ends; after that we
@@ -107,6 +108,7 @@ function App() {
   )
   const [trackerProfiles, setTrackerProfiles] = useState({})
   // Coarse clock so "pending MMR" expiry and the rate-limit notice refresh.
+  const lang = useLang() // re-render on language change
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 15000)
@@ -634,13 +636,12 @@ function App() {
                 const scorer = message.Data.Scorer
                 const assister = message.Data.Assister
                 const speed = message.Data.GoalSpeed
-                let text = `${scorer.Name} scored`
-                if (assister?.Name) text += ` (assist: ${assister.Name})`
                 pushFeedEvent({
                   icon: '⚽',
                   teamNum: scorer.TeamNum,
                   mine: !!trackedPlayerName && scorer.Name === trackedPlayerName,
-                  text,
+                  key: assister?.Name ? 'feed.goalAssist' : 'feed.goal',
+                  params: { name: scorer.Name, other: assister?.Name },
                   detail: typeof speed === 'number' && speed > 0 ? `${Math.round(speed)} km/h` : '',
                 })
               }
@@ -654,7 +655,8 @@ function App() {
                     icon: cfg.icon,
                     teamNum: main.TeamNum,
                     mine: !!trackedPlayerName && main.Name === trackedPlayerName,
-                    text: cfg.text(main, second),
+                    key: cfg.key,
+                    params: { name: main.Name, other: second?.Name || '?' },
                     detail: '',
                   })
                 }
@@ -876,7 +878,7 @@ function App() {
         }
         addDebugInfo(`✗ Error: ${err.message}`)
         setConnectionStatus('error')
-        setError(`Cannot connect to relay: ${err.message}`)
+        setError(t('error.relay', { msg: err.message }))
         
         // Reconnect after 3 seconds
         setTimeout(() => {
@@ -969,15 +971,16 @@ function App() {
     </div>
   )
 
-  const connLabel = connectionStatus === 'connected' ? (matchData ? 'Live' : 'Connected') : connectionStatus === 'connecting' ? 'Connecting' : 'Offline'
+  const connLabel = t(connectionStatus === 'connected' ? (matchData ? 'conn.live' : 'conn.connected') : connectionStatus === 'connecting' ? 'conn.connecting' : 'conn.offline')
 
   return (
     <div className="app">
       {DEMO && <DemoPanel />}
       <header className="topbar">
         <h1 className="brand">Rocket League <b>Pulse</b></h1>
+        <div className="tabs-slot">
         {matchData && (
-          <div className="tabs" role="group" aria-label="Rank playlist">
+          <div className="tabs" role="group" aria-label={t('tabs.label')}>
             {PLAYLISTS.map((p) => (
               <button
                 key={p.id}
@@ -985,20 +988,28 @@ function App() {
                 aria-pressed={selectedPlaylistId === p.id}
                 className={selectedPlaylistId === p.id ? 'tab active' : 'tab'}
                 onClick={() => setPlaylistPick(p.id === detectedPlaylistId ? null : p.id)}
-                title={p.id === detectedPlaylistId ? 'Detected from this match' : ''}
+                title={p.id === detectedPlaylistId ? t('tabs.detected') : ''}
               >
                 {p.label}
               </button>
             ))}
           </div>
         )}
-        <div className={`conn ${connectionStatus}`}><i />{connLabel}</div>
+        </div>
+        <div className="topbar-right">
+          <div className="tabs" role="group" aria-label={t('lang.label')}>
+            {['es', 'en'].map((l) => (
+              <button key={l} type="button" className={lang === l ? 'tab active' : 'tab'} aria-pressed={lang === l} onClick={() => setLang(l)}>{l.toUpperCase()}</button>
+            ))}
+          </div>
+          <div className={`conn ${connectionStatus}`}><i />{connLabel}</div>
+        </div>
       </header>
 
       {error && <div className="notice error" role="alert">{error}</div>}
       {limited && (
         <div className="notice warn" role="status">
-          tracker.gg is rate-limiting this PC, so ranks may be missing or stale. Retrying automatically (about {limitedMins} min).
+          {t('notice.limited', { mins: limitedMins })}
         </div>
       )}
 
@@ -1012,12 +1023,12 @@ function App() {
             </div>
             {eventFeed.length > 0 && (
               <details className="feed" open>
-                <summary>Match feed <span>{eventFeed.length}</span></summary>
+                <summary>{t('feed.title')} <span>{eventFeed.length}</span></summary>
                 <div className="feed-list">
                   {eventFeed.map((e) => (
                     <div key={e.id} className={`feed-item ${e.teamNum === 0 ? 'blue' : e.teamNum === 1 ? 'orange' : ''} ${e.mine ? 'mine' : ''}`}>
                       <span>{e.icon}</span>
-                      <span className="feed-text">{e.text}</span>
+                      <span className="feed-text">{t(e.key, e.params)}</span>
                       {e.detail && <span className="feed-detail">{e.detail}</span>}
                     </div>
                   ))}
@@ -1028,40 +1039,40 @@ function App() {
 
           <aside className="session">
             <div className="session-head">
-              <h2>Session</h2>
-              <span className="muted">since {sessionStartedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <h2>{t('session.title')}</h2>
+              <span className="muted">{t('session.since', { time: sessionStartedAt.toLocaleTimeString(getLang(), { hour: '2-digit', minute: '2-digit' }) })}</span>
               {totalGames > 0 && (
-                <button type="button" className="btn" onClick={() => { if (window.confirm("Start a new session? This clears the history and MMR progress.")) resetSession() }}>
-                  New
+                <button type="button" className="btn" onClick={() => { if (window.confirm(t('session.confirm'))) resetSession() }}>
+                  {t('session.new')}
                 </button>
               )}
             </div>
 
             <div className="hero-stats">
               <div className="hero">
-                <span className="hero-label">MMR {sessionPlaylistLabel}</span>
+                <span className="hero-label">{t('session.mmr')} {sessionPlaylistLabel}</span>
                 {activeMmr ? (
                   <>
                     <span className="hero-value">{activeMmr.current}</span>
-                    <span className={`hero-sub ${sign(mmrTotal)}`}>{fmtDelta(mmrTotal)} <em>from {activeMmr.start}</em></span>
+                    <span className={`hero-sub ${sign(mmrTotal)}`}>{fmtDelta(mmrTotal)} <em>{t('session.from', { n: activeMmr.start })}</em></span>
                   </>
                 ) : (
                   <span className="hero-value dim">—</span>
                 )}
               </div>
               <div className="hero">
-                <span className="hero-label">Record</span>
+                <span className="hero-label">{t('session.record')}</span>
                 <span className="hero-value"><span className="pos">{wins}</span><span className="dim">–</span><span className="neg">{losses}</span></span>
                 <span className="hero-sub">
                   {decided > 0 ? `${winRate}%` : ''}
-                  {streakCount > 1 && <em className={streakType === 'W' ? 'pos' : 'neg'}> {streakCount}{streakType} streak</em>}
+                  {streakCount > 1 && <em className={streakType === 'W' ? 'pos' : 'neg'}> {t('session.streak', { n: streakCount, type: t(`result.${streakType}`) })}</em>}
                 </span>
               </div>
             </div>
 
             {activeSeries.length >= 2 && (
               <div className="graph">
-                <div className="graph-head"><span>MMR this session</span><span>{mmrFloor} – {mmrPeak}</span></div>
+                <div className="graph-head"><span>{t('session.graph')}</span><span>{mmrFloor} – {mmrPeak}</span></div>
                 <Sparkline values={activeSeries} />
               </div>
             )}
@@ -1069,13 +1080,13 @@ function App() {
             {totalGames > 0 && (
               <div className="sstats">
                 {[
-                  ['Goals', sessionStats.goals, `${perGame(sessionStats.goals)}/g`],
-                  ['Assists', sessionStats.assists, `${perGame(sessionStats.assists)}/g`],
-                  ['Saves', sessionStats.saves, `${perGame(sessionStats.saves)}/g`],
-                  ['Shooting', `${shootingPct}%`],
-                  ['Demos', sessionStats.demos],
-                  ['MVPs', sessionStats.mvps],
-                  ['Best streak', `${bestWinStreak}W`],
+                  [t('stat.goals'), sessionStats.goals, `${perGame(sessionStats.goals)}/g`],
+                  [t('stat.assists'), sessionStats.assists, `${perGame(sessionStats.assists)}/g`],
+                  [t('stat.saves'), sessionStats.saves, `${perGame(sessionStats.saves)}/g`],
+                  [t('stat.shooting'), `${shootingPct}%`],
+                  [t('stat.demos'), sessionStats.demos],
+                  [t('stat.mvps'), sessionStats.mvps],
+                  [t('stat.bestStreak'), `${bestWinStreak}${t('result.W')}`],
                 ].map(([label, value, sub]) => (
                   <div key={label} className="sstat">
                     <span>{label}</span>
@@ -1089,7 +1100,7 @@ function App() {
               {totalGames > 0 ? (
                 sessionHistory.map((m) => (
                   <li key={m.id}>
-                    <span className={`pill ${m.result === 'W' ? 'win' : m.result === 'L' ? 'loss' : ''}`}>{m.result || '?'}</span>
+                    <span className={`pill ${m.result === 'W' ? 'win' : m.result === 'L' ? 'loss' : ''}`}>{m.result ? t(`result.${m.result}`) : '?'}</span>
                     <span className="h-score">{m.blueScore}–{m.orangeScore}</span>
                     <span className="muted">{PLAYLISTS.find((p) => p.id === m.playlistId)?.label}</span>
                     <span className="muted h-time">{m.time}</span>
@@ -1099,18 +1110,18 @@ function App() {
                   </li>
                 ))
               ) : (
-                <li className="empty">No completed matches yet.</li>
+                <li className="empty">{t('session.empty')}</li>
               )}
             </ul>
           </aside>
         </main>
       ) : (
         <main className="waiting">
-          <div className="waiting-title">{connectionStatus === 'connected' ? 'Waiting for a match…' : connectionStatus === 'connecting' ? 'Connecting to the game…' : 'Cannot reach the game'}</div>
-          <p className="muted">Open Rocket League with the Stats API enabled. The dashboard appears as soon as a match starts.</p>
-          {!DEMO && <a className="btn demo-link" href="?demo">Try demo mode</a>}
+          <div className="waiting-title">{t(connectionStatus === 'connected' ? 'wait.connected' : connectionStatus === 'connecting' ? 'wait.connecting' : 'wait.offline')}</div>
+          <p className="muted">{t('wait.help')}</p>
+          {!DEMO && <a className="btn demo-link" href="?demo">{t('wait.demo')}</a>}
           <details className="debug">
-            <summary>Connection log</summary>
+            <summary>{t('wait.log')}</summary>
             {debugInfo.map((info, idx) => (
               <div key={idx}>{info}</div>
             ))}

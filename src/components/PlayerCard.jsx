@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 const PLATFORM_LABEL = { epic: 'Epic', steam: 'Steam', psn: 'PSN', playstation: 'PSN', ps4: 'PSN', ps5: 'PSN', xbox: 'Xbox', xboxone: 'Xbox', xbl: 'Xbox', switch: 'Switch', nintendo: 'Switch' }
 
 const platformOf = (primaryId) => (primaryId?.split('|')[0] || '').toLowerCase()
@@ -23,10 +25,10 @@ export default function PlayerCard({ player, profile, playlistId, isMe, onSelect
   const boost = Math.max(0, Math.min(100, Math.round(num(player.Boost))))
 
   let rankText
-  if (isBot) rankText = 'Bot'
-  else if (profile === undefined) rankText = limited ? 'Tracker busy, retrying…' : 'Loading rank…'
-  else if (profile === null) rankText = 'No tracker profile'
-  else rankText = tier || 'Unranked'
+  if (isBot) rankText = t('card.bot')
+  else if (profile === undefined) rankText = t(limited ? 'card.busy' : 'card.loading')
+  else if (profile === null) rankText = t('card.noProfile')
+  else rankText = tier || t('card.unranked')
 
   return (
     <article className={`pcard ${team} ${isMe ? 'me' : ''}`}>
@@ -37,13 +39,13 @@ export default function PlayerCard({ player, profile, playlistId, isMe, onSelect
           {/* There is no "me" flag in the Stats API, so the user can say it. */}
           {player.PrimaryId && !isBot && (
             <button type="button" className={`me-btn ${isMe ? 'on' : ''}`} aria-pressed={isMe} onClick={() => onSelectMe(player.PrimaryId)}>
-              {isMe ? 'You' : 'This is me'}
+              {isMe ? t('card.you') : t('card.me')}
             </button>
           )}
           <span className="pcard-plat">{PLATFORM_LABEL[platformOf(player.PrimaryId)] || ''}</span>
           {!isBot && (
-            <a className="pcard-link" href={trackerUrl(player)} target="_blank" rel="noreferrer" aria-label={`Open ${player.Name} on tracker.network (new tab)`}>
-              Tracker<span aria-hidden="true"> ↗</span>
+            <a className="pcard-link" href={trackerUrl(player)} target="_blank" rel="noreferrer" aria-label={t('card.open', { name: player.Name })}>
+              {t('card.tracker')}<span aria-hidden="true"> ↗</span>
             </a>
           )}
         </div>
@@ -53,24 +55,24 @@ export default function PlayerCard({ player, profile, playlistId, isMe, onSelect
           {mmr != null && <span className="pcard-mmr">{mmr}</span>}
         </div>
         {showBoost && (
-          <div className="boost" role="progressbar" aria-label="Boost" aria-valuemin={0} aria-valuemax={100} aria-valuenow={boost}>
+          <div className="boost" role="progressbar" aria-label={t('card.boost')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={boost}>
             <div className="boost-fill" style={{ transform: `scaleX(${boost / 100})` }} />
           </div>
         )}
         {career && (
           <div className="pcard-career">
-            <span>{career.wins?.displayValue || '—'} wins</span>
-            <span>{career.goals?.displayValue || '—'} goals</span>
-            <span>{career.goalShotRatio?.displayValue || '—'}% shots</span>
+            <span>{t('card.wins', { n: career.wins?.displayValue || '—' })}</span>
+            <span>{t('card.goals', { n: career.goals?.displayValue || '—' })}</span>
+            <span>{t('card.shots', { n: career.goalShotRatio?.displayValue || '—' })}</span>
           </div>
         )}
       </div>
       <div className="pcard-stats">
-        <div className="pstat score"><b>{num(player.Score)}</b><span>Score</span></div>
-        <div className="pstat"><b>{num(player.Goals)}</b><span>Goals</span></div>
-        <div className="pstat"><b>{num(player.Assists)}</b><span>Assists</span></div>
-        <div className="pstat"><b>{num(player.Saves)}</b><span>Saves</span></div>
-        <div className="pstat"><b>{num(player.Shots)}</b><span>Shots</span></div>
+        <div className="pstat score"><b>{num(player.Score)}</b><span>{t('card.score')}</span></div>
+        <div className="pstat"><b>{num(player.Goals)}</b><span>{t('stat.goals')}</span></div>
+        <div className="pstat"><b>{num(player.Assists)}</b><span>{t('stat.assists')}</span></div>
+        <div className="pstat"><b>{num(player.Saves)}</b><span>{t('stat.saves')}</span></div>
+        <div className="pstat"><b>{num(player.Shots)}</b><span>{t('card.shotsLabel')}</span></div>
       </div>
     </article>
   )
