@@ -148,7 +148,7 @@ const FRESH_TTL = 45 * 1000        // ?fresh=1 (post-match MMR polling)
 const NOTFOUND_TTL = 10 * 60 * 1000
 const SPACING_MS = 1500            // gap between upstream calls
 const COOLDOWN_BASE = 60 * 1000
-const COOLDOWN_MAX = 10 * 60 * 1000
+const COOLDOWN_MAX = 5 * 60 * 1000
 
 const cache = new Map()
 try {

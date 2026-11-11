@@ -328,7 +328,7 @@ function App() {
         const res = await fetch(`/tracker/${platform}/${encodeURIComponent(playerName)}${fresh ? '?fresh=1' : ''}`)
         if (res.ok) {
           if (isMounted) setTrackerLimitedUntil(0)
-          return { profile: await res.json() }
+          return { profile: await res.json(), cached: res.headers.get('X-Tracker-Cache') !== 'miss' }
         }
         const body = await res.json().catch(() => ({}))
         if (res.status === 429 && isMounted) {
@@ -561,6 +561,8 @@ function App() {
         const trackerFetchedSet = new Set()   // pid → resolved this match (profile or 404)
         const trackerInflight = new Set()     // pid → fetch currently in flight
         const trackerNextTry = new Map()      // pid → earliest time to retry after a failure
+        let trackerGate = 0                   // earliest time for the NEXT lookup of any player
+        const TRACKER_SPACING_MS = DEMO ? 0 : 4000
 
         while (true) {
           const { done, value } = await reader.read()
@@ -616,6 +618,7 @@ function App() {
                 trackerFetchedSet.clear()
                 trackerInflight.clear()
                 trackerNextTry.clear()
+                trackerGate = 0
                 maxPlayerCountThisMatch = 0
                 if (isMounted) {
                   setEventFeed([])
@@ -817,6 +820,10 @@ function App() {
                   // failure (tracker.gg rate limit, network) retries after a
                   // delay — NOT on the next UpdateState, which arrives many times
                   // a second and used to burn every retry in under a second.
+                  // One lookup at a time, spaced out: tracker.gg lets a single request
+                  // through and challenges a burst, so a burst made the user's own rank
+                  // lose the race. We also wait until "me" is known so it goes first.
+                  const meKnown = !!manualMeRef.current || targetVotes.size > 0 || updateStateCount > 120
                   const queueOrder = [...statePlayers].sort(
                     (a, b) => (b?.PrimaryId === trackedPlayerPrimaryId) - (a?.PrimaryId === trackedPlayerPrimaryId)
                   )
@@ -825,6 +832,7 @@ function App() {
                     if (!pid || isBotId(pid)) continue
                     if (trackerFetchedSet.has(pid) || trackerInflight.has(pid)) continue
                     if (Date.now() < (trackerNextTry.get(pid) || 0)) continue
+                    if (!meKnown || trackerInflight.size > 0 || Date.now() < trackerGate) break
 
                     const platform = getPlatformFromPrimaryId(pid)
                     const identifier = getTrackerIdentifier(player, platform)
@@ -832,8 +840,12 @@ function App() {
                     if (!platform || !identifier) continue
 
                     trackerInflight.add(pid)
-                    fetchTrackerProfile(identifier, platform).then(({ profile, status, retryAfter }) => {
+                    // My own lookup is always fresh: it sets the MMR baseline for the session
+                    // graph and per-match deltas, so a stale cached value would skew them.
+                    fetchTrackerProfile(identifier, platform, pid === trackedPlayerPrimaryId).then(({ profile, cached, status, retryAfter }) => {
                       trackerInflight.delete(pid)
+                      // Cache hits never touched tracker.gg, so they need no spacing.
+                      trackerGate = Date.now() + (status === 429 && retryAfter ? (retryAfter + 2) * 1000 : cached ? 0 : TRACKER_SPACING_MS)
                       if (!isMounted) return
                       if (profile) {
                         trackerFetchedSet.add(pid)
@@ -849,6 +861,7 @@ function App() {
                         addDebugInfo(`Tracker ${status || 'offline'}: ${identifier} (${platform}) — retrying later`)
                       }
                     })
+                    break // next player on a later frame, after the spacing
                   }
 
                   const playerCount = message.Data.Players?.length || 0

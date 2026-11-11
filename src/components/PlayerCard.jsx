@@ -20,7 +20,13 @@ export default function PlayerCard({ player, profile, playlistId, isMe, onSelect
   const tier = seg?.stats?.tier?.metadata?.name
   const division = seg?.stats?.division?.metadata?.name
   const mmr = seg?.stats?.rating?.value
-  const icon = seg?.stats?.tier?.metadata?.iconUrl
+  // Local icons keyed by tier value (0 unranked, 1-18 Bronze I..Champion III,
+  // 19-21 GC I-III, 22 SSL): tracker.gg's CDN only has the pre-2020 GC art and
+  // no GC II/III, and local files cost no requests. Falls back to its URL.
+  const tierValue = seg?.stats?.tier?.value
+  const icon = Number.isInteger(tierValue) && tierValue >= 0 && tierValue <= 22
+    ? `${import.meta.env.BASE_URL}ranks/${tierValue}.png`
+    : seg?.stats?.tier?.metadata?.iconUrl
   const career = profile?.segments?.find((s) => s.type === 'overview')?.stats
   const boost = Math.max(0, Math.min(100, Math.round(num(player.Boost))))
 

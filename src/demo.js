@@ -16,11 +16,13 @@ const rating = (name, pid) => ratings[name]?.[pid] ?? 300 + ((hash(name + pid) %
 export function demoProfile(name) {
   const seg = (pid) => {
     const r = rating(name, pid)
+    const ti = Math.min(6, Math.floor(r / 230))
+    const di = Math.floor(r / 77) % 3
     return {
       type: 'playlist',
       attributes: { playlistId: pid },
       stats: {
-        tier: { metadata: { name: `${TIERS[Math.min(6, Math.floor(r / 230))]} ${['I', 'II', 'III'][Math.floor(r / 77) % 3]}` } },
+        tier: { value: ti * 3 + di + 1, metadata: { name: `${TIERS[ti]} ${['I', 'II', 'III'][di]}` } },
         division: { metadata: { name: `Division ${['I', 'II', 'III', 'IV'][hash(name) % 4]}` } },
         rating: { value: r },
       },
